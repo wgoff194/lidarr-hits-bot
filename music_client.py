@@ -68,6 +68,12 @@ class MusicClient:
 
         return _normalize_artist(artists[0])
 
+    def search_artists(self, name: str, limit: int = 10) -> list[dict]:
+        """Search for artists. Returns list of normalized results."""
+        results = _get("/search/artist", params={"q": name, "limit": limit})
+        artists = results.get("data", [])
+        return [_normalize_artist(a) for a in artists]
+
     def get_artist_top_tracks(self, artist_id: str) -> list[dict]:
         """Get an artist's top tracks (up to 50). Used for popularity ranking."""
         result = _get(f"/artist/{artist_id}/top", params={"limit": 50})

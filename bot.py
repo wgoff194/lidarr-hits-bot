@@ -79,6 +79,26 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
 # ── Interactive Add Artist UI ─────────────────────────────────────────────────
 
 
+def fuzzy_find_artist(artists: list[dict], query: str) -> Optional[dict]:
+    """Fuzzy match an artist name. Returns best match or None."""
+    query = query.strip().lower()
+    if not query:
+        return None
+    # Exact match
+    for a in artists:
+        if a["name"].lower() == query:
+            return a
+    # Starts with
+    for a in artists:
+        if a["name"].lower().startswith(query):
+            return a
+    # Contains
+    for a in artists:
+        if query in a["name"].lower():
+            return a
+    return None
+
+
 class ThresholdModal(discord.ui.Modal, title="Set Popularity Threshold"):
     """Modal popup for editing the threshold value."""
 
@@ -122,6 +142,54 @@ class ThresholdModal(discord.ui.Modal, title="Set Popularity Threshold"):
         )
 
 
+class SearchModal(discord.ui.Modal, title="Search Artists"):
+    """Modal for fuzzy searching artists in a dropdown."""
+
+    search_input = discord.ui.TextInput(
+        label="Type artist name (partial OK)",
+        placeholder="e.g. 'link' for Linkin Park",
+        style=discord.TextStyle.short,
+        required=True,
+        max_length=100,
+    )
+
+    def __init__(self, parent_view, select_component, all_artists: list[dict]):
+        super().__init__()
+        self.parent_view = parent_view
+        self.select_component = select_component
+        self.all_artists = all_artists
+
+    async def on_submit(self, interaction: discord.Interaction):
+        query = self.search_input.value.strip().lower()
+        if not query:
+            matches = self.all_artists
+        else:
+            matches = [a for a in self.all_artists if query in a["name"].lower()]
+
+        if not matches:
+            await interaction.response.send_message(
+                f"❌ No artists matching '{self.search_input.value}'", ephemeral=True
+            )
+            return
+
+        # Update the dropdown options
+        options = []
+        for a in matches[:25]:
+            options.append(discord.SelectOption(label=a["name"], value=a["name"]))
+        self.select_component.options = options
+
+        # Update placeholder to show filter
+        if query:
+            self.select_component.placeholder = f"🔍 {len(matches)} match(es) for '{self.search_input.value}'..."
+        else:
+            self.select_component.placeholder = "Pick an artist..."
+
+        await interaction.response.edit_message(view=self.parent_view)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await interaction.response.send_message(f"❌ Error: {error}", ephemeral=True)
+
+
 class AddArtistView(discord.ui.View):
     """Interactive view for configuring an artist before adding."""
 
@@ -133,7 +201,8 @@ class AddArtistView(discord.ui.View):
         artist_data: Optional[dict],
         folders: list[dict],
         metadata_profiles: list[dict],
-        lidarr_client,  # LidarrClient instance for auto-resolving profiles
+        lidarr_client,
+        button_label: str = "✅ Add Artist",
     ):
         super().__init__(timeout=300)  # 5 minute timeout
         self.author_id = author_id
@@ -143,6 +212,7 @@ class AddArtistView(discord.ui.View):
         self.folders = folders
         self.metadata_profiles = metadata_profiles
         self.lidarr = lidarr_client
+        self.button_label = button_label
         self.threshold = Config.POPULARITY_THRESHOLD
         self.selected_mode = Config.DOWNLOAD_MODE
         self.selected_folder: Optional[str] = None  # None = use default
@@ -154,6 +224,9 @@ class AddArtistView(discord.ui.View):
         self._setup_folder_select()
         self._setup_mode_select()
         self._setup_metadata_profile_select()
+
+        # Set dynamic button label
+        self.confirm_button.label = button_label
 
     def _setup_folder_select(self):
         """Populate the folder dropdown from Lidarr data."""
@@ -498,6 +571,79 @@ async def help_cmd(ctx: commands.Context):
     await ctx.send(embed=embed)
 
 
+class AddFuzzyPickerView(discord.ui.View):
+    """Dropdown to pick from fuzzy search results with confirm/cancel."""
+
+    def __init__(self, author_id: int, results: list[dict]):
+        super().__init__(timeout=120)
+        self.author_id = author_id
+        self.selected: Optional[dict] = None
+
+        options = []
+        for r in results[:25]:
+            fans = r.get("nb_fan", 0)
+            if fans >= 1_000_000:
+                desc = f"{fans / 1_000_000:.1f}M fans"
+            elif fans >= 1_000:
+                desc = f"{fans / 1_000:.0f}K fans"
+            else:
+                desc = f"{fans} fans"
+            options.append(discord.SelectOption(
+                label=r["name"],
+                value=r["id"],
+                description=desc,
+            ))
+        self.artist_select.options = options
+
+    @discord.ui.select(placeholder="Pick the artist you meant...", min_values=1, max_values=1, row=0)
+    async def artist_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        # Store the selected artist data
+        for opt in select.options:
+            if opt.value == select.values[0]:
+                self.selected = {"id": opt.value, "name": opt.label, "nb_fan": 0}
+                break
+        for opt in select.options:
+            opt.default = opt.value == select.values[0]
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="✅ Add This Artist", style=discord.ButtonStyle.success, row=1)
+    async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        if not self.selected:
+            await interaction.response.send_message("❌ Pick an artist first.", ephemeral=True)
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            embed=discord.Embed(title=f"✅ Selected: {self.selected['name']}", color=0x1DB954),
+            view=self,
+        )
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=1)
+    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.selected = None
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            embed=discord.Embed(title="❌ Cancelled", color=0xFF0000),
+            view=self,
+        )
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
 @bot.command(name="add")
 async def add_artist(ctx: commands.Context, *, artist_name: str = None):
     """Add an artist with an interactive setup dialog."""
@@ -507,7 +653,7 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
 
     artist_name = artist_name.strip()
 
-    # Validate on Deezer
+    # Search on Deezer
     artist_data = None
     music_id = None
     display_name = artist_name
@@ -515,11 +661,37 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
         sp = MusicClient()
         found = sp.search_artist(artist_name)
         if not found:
-            await ctx.send(f"❌ Couldn't find **{artist_name}** on Deezer. Check the spelling?")
-            return
+            # Fuzzy search — show picker
+            results = sp.search_artists(artist_name)
+            if not results:
+                await ctx.send(f"❌ Couldn't find **{artist_name}** on Deezer. Check the spelling?")
+                return
+
+            # Check if exact match in results
+            exact = None
+            for r in results:
+                if r["name"].lower() == artist_name.lower():
+                    exact = r
+                    break
+            if exact:
+                found = exact
+            else:
+                # Show picker
+                picker = AddFuzzyPickerView(ctx.author.id, results)
+                embed = discord.Embed(
+                    title=f"🔍 Results for: {artist_name}",
+                    description="Pick the artist you meant:",
+                    color=0x1DB954,
+                )
+                await ctx.send(embed=embed, view=picker)
+                await picker.wait()
+                if not picker.selected:
+                    return
+                found = picker.selected
+
         music_id = found["id"]
         display_name = found["name"]
-        artist_data = found  # Contains genres, popularity, images, etc.
+        artist_data = found
     except Exception as e:
         log.warning("Music lookup failed for '%s': %s", artist_name, e)
 
@@ -638,6 +810,7 @@ class UpdatePickerView(discord.ui.View):
     def __init__(self, author_id: int, artists: list[dict]):
         super().__init__(timeout=120)
         self.author_id = author_id
+        self.artists = artists
         self.selected: Optional[str] = None
 
         options = []
@@ -656,35 +829,47 @@ class UpdatePickerView(discord.ui.View):
             item.disabled = True
         await interaction.response.edit_message(view=self)
 
+    @discord.ui.button(label="🔍 Search", style=discord.ButtonStyle.secondary, row=1)
+    async def search_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        modal = SearchModal(self, self.artist_select, self.artists)
+        await interaction.response.send_modal(modal)
+
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True
 
 
 @bot.command(name="update")
-async def update_cmd(ctx: commands.Context):
+async def update_cmd(ctx: commands.Context, *, artist_name: str = None):
     """Update an artist's settings — folder, mode, threshold, metadata profile."""
     artists = db.list_artists()
     if not artists:
         await ctx.send("📭 Watchlist is empty.")
         return
 
-    # Step 1: Pick artist
-    picker = UpdatePickerView(ctx.author.id, artists)
-    await ctx.send(embed=discord.Embed(
-        title="✏️ Update Artist",
-        description="Pick an artist to update their settings.",
-        color=0x1DB954,
-    ), view=picker)
-    await picker.wait()
-
-    if not picker.selected:
-        return
-
-    artist = db.get_artist(picker.selected)
-    if not artist:
-        await ctx.send(f"❌ **{picker.selected}** not found.")
-        return
+    # Step 1: Pick artist (fuzzy from arg, or dropdown)
+    if artist_name:
+        artist = fuzzy_find_artist(artists, artist_name)
+        if not artist:
+            await ctx.send(f"❌ No artist matching **{artist_name}** in watchlist.")
+            return
+    else:
+        picker = UpdatePickerView(ctx.author.id, artists)
+        await ctx.send(embed=discord.Embed(
+            title="✏️ Update Artist",
+            description="Pick an artist to update their settings.",
+            color=0x1DB954,
+        ), view=picker)
+        await picker.wait()
+        if not picker.selected:
+            return
+        artist = db.get_artist(picker.selected)
+        if not artist:
+            await ctx.send(f"❌ **{picker.selected}** not found.")
+            return
 
     # Step 2: Fetch Lidarr data
     folders = []
@@ -715,6 +900,7 @@ async def update_cmd(ctx: commands.Context):
         folders=folders,
         metadata_profiles=metadata_profiles,
         lidarr_client=lidarr,
+        button_label="✅ Update Artist",
     )
 
     # Pre-populate current values
@@ -929,6 +1115,14 @@ class ScanArtistView(discord.ui.View):
             opt.default = opt.value == self.selected
         await interaction.response.edit_message(view=self)
 
+    @discord.ui.button(label="🔍 Search", style=discord.ButtonStyle.secondary, row=1)
+    async def search_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        modal = SearchModal(self, self.artist_select, self.artists)
+        await interaction.response.send_modal(modal)
+
     @discord.ui.button(label="🔍 Scan Artist", style=discord.ButtonStyle.success, row=1)
     async def go_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.author_id:
@@ -980,13 +1174,27 @@ class ScanArtistView(discord.ui.View):
 
 
 @bot.command(name="scan")
-async def scan_cmd(ctx: commands.Context):
+async def scan_cmd(ctx: commands.Context, *, artist_name: str = None):
     """Full catalog scan — pick an artist or scan all."""
     artists = db.list_artists()
     if not artists:
         await ctx.send("📭 Watchlist is empty. Add an artist with `?add <name>` first.")
         return
 
+    # Fuzzy match from argument
+    if artist_name:
+        artist = fuzzy_find_artist(artists, artist_name)
+        if not artist:
+            await ctx.send(f"❌ No artist matching **{artist_name}** in watchlist.")
+            return
+        await ctx.send(f"🔍 Scanning **{artist['name']}**'s full catalog for hits...")
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(None, run_daily_check, artist["name"], True)
+        report = format_results(results)
+        await ctx.send(report)
+        return
+
+    # No argument — show dropdown
     view = ScanArtistView(ctx.author.id, artists)
     embed = discord.Embed(
         title="🔍 Full Catalog Scan",
@@ -1069,6 +1277,14 @@ class PruneArtistView(discord.ui.View):
             opt.default = opt.value == self.selected
         await interaction.response.edit_message(view=self)
 
+    @discord.ui.button(label="🔍 Search", style=discord.ButtonStyle.secondary, row=1)
+    async def search_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        modal = SearchModal(self, self.artist_select, self.artists)
+        await interaction.response.send_modal(modal)
+
     @discord.ui.button(label="✂️ Prune Artist", style=discord.ButtonStyle.success, row=1)
     async def go_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.author_id:
@@ -1120,13 +1336,27 @@ class PruneArtistView(discord.ui.View):
 
 
 @bot.command(name="prune")
-async def prune_cmd(ctx: commands.Context):
+async def prune_cmd(ctx: commands.Context, *, artist_name: str = None):
     """Prune downloaded albums — pick an artist or prune all."""
     artists = db.list_artists()
     if not artists:
         await ctx.send("📭 Watchlist is empty. Add an artist with `?add <name>` first.")
         return
 
+    # Fuzzy match from argument
+    if artist_name:
+        artist = fuzzy_find_artist(artists, artist_name)
+        if not artist:
+            await ctx.send(f"❌ No artist matching **{artist_name}** in watchlist.")
+            return
+        await ctx.send(f"✂️ Pruning **{artist['name']}**'s downloaded albums...")
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(None, prune_downloaded_albums, artist["name"], True)
+        report = format_prune_results(results)
+        await ctx.send(report)
+        return
+
+    # No argument — show dropdown
     view = PruneArtistView(ctx.author.id, artists)
     embed = discord.Embed(
         title="✂️ Prune Downloaded Albums",
