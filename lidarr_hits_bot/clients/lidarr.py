@@ -50,21 +50,17 @@ class LidarrClient:
             if p["name"].lower() == Config.LIDARR_QUALITY_PROFILE.lower():
                 self._quality_profile_id = p["id"]
                 return p["id"]
-        # Fallback: use the first profile
         if profiles:
             self._quality_profile_id = profiles[0]["id"]
-            log.warning(
-                "Quality profile '%s' not found, using '%s'",
-                Config.LIDARR_QUALITY_PROFILE,
-                profiles[0]["name"],
-            )
+            log.warning("Quality profile '%s' not found, using '%s'",
+                        Config.LIDARR_QUALITY_PROFILE, profiles[0]["name"])
             return profiles[0]["id"]
         raise RuntimeError("No Lidarr quality profiles found")
 
-    # ── Metadata profiles ─────────────────────────────────────────────────────
+    # ── Metadata profiles ────────────────────────────────────────────────────
 
     def get_metadata_profiles(self) -> list[dict]:
-        """Get all metadata profiles from Lidarr. Returns list of {id, name}."""
+        """Get all metadata profiles from Lidarr."""
         return self._get("/metadataprofile")
 
     def get_metadata_profile_id(self) -> int:
@@ -78,12 +74,7 @@ class LidarrClient:
         raise RuntimeError("No Lidarr metadata profiles found")
 
     def resolve_metadata_profile(self, folder_name: str) -> int:
-        """
-        Auto-select metadata profile based on root folder name.
-        Comedy folder → Comedy profile
-        Soundtracks folder → Soundtrack profile
-        Everything else → 99 (Everything) by default
-        """
+        """Auto-select metadata profile based on root folder name."""
         folder_lower = folder_name.strip().lower()
         profiles = self.get_metadata_profiles()
 
@@ -96,92 +87,63 @@ class LidarrClient:
                 if "soundtrack" in pname:
                     return p["id"]
 
-        # Default: 99 - Everything (includes singles)
         for p in profiles:
             if "99" in p["name"] or "everything" in p["name"].lower():
                 return p["id"]
 
-        # Fallback: first profile
         return profiles[0]["id"] if profiles else 1
 
+    # ── Root folders ─────────────────────────────────────────────────────────
+
     def get_root_folders(self) -> list[dict]:
-        """
-        Get all root folders from Lidarr (always fresh from API).
-        Returns list of dicts with:
-        - path: full filesystem path (e.g. "/music/Warren's Music")
-        - name: derived from the last path component (e.g. "Warren's Music")
-        """
+        """Get all root folders from Lidarr (always fresh)."""
         raw = self._get("/rootfolder")
         folders = []
         for f in raw:
             path = f["path"].rstrip("/")
-            # Derive a friendly name from the last path component
             name = path.split("/")[-1] if "/" in path else path
-            folders.append({
-                "path": f["path"],
-                "name": name,
-                "id": f.get("id"),
-            })
+            folders.append({"path": f["path"], "name": name, "id": f.get("id")})
         return folders
 
     def resolve_root_folder(self, name_or_path: str) -> Optional[str]:
-        """
-        Resolve a folder name (case-insensitive) to its full path.
-        Accepts either the friendly name ("Warren's Music") or a full path.
-        Returns the full path, or None if not found.
-        """
+        """Resolve a folder name to its full path."""
         folders = self.get_root_folders()
         search = name_or_path.strip().lower()
 
-        # Try exact path match first
         for f in folders:
             if f["path"].rstrip("/").lower() == search:
                 return f["path"]
-
-        # Try name match (last path component)
         for f in folders:
             if f["name"].lower() == search:
                 return f["path"]
-
-        # Try partial match
         for f in folders:
             if search in f["name"].lower():
                 return f["path"]
-
         return None
 
     def get_root_folder(self, folder_path: Optional[str] = None) -> str:
-        """
-        Get a root folder path. If folder_path is provided, validate it exists.
-        Otherwise fall back to the .env default.
-        """
+        """Get a root folder path with fallback."""
         if folder_path:
             resolved = self.resolve_root_folder(folder_path)
             if resolved:
                 return resolved
-            log.warning("Root folder '%s' not found, falling back to default", folder_path)
+            log.warning("Root folder '%s' not found, falling back", folder_path)
 
         folders = self.get_root_folders()
         for f in folders:
             if f["path"] == Config.LIDARR_ROOT_FOLDER:
                 return f["path"]
         if folders:
-            log.warning(
-                "Root folder '%s' not found, using '%s'",
-                Config.LIDARR_ROOT_FOLDER,
-                folders[0]["path"],
-            )
             return folders[0]["path"]
         raise RuntimeError("No Lidarr root folders found")
 
     # ── Artist lookup ────────────────────────────────────────────────────────
 
     def lookup_artist(self, name: str) -> Optional[dict]:
-        """Search Lidarr's artist lookup for a name. Returns best match."""
+        """Search Lidarr's artist lookup for a name."""
         results = self._get("/artist/lookup", params={"term": name})
         if not results:
             return None
-        # Prefer exact name match
         name_lower = name.strip().lower()
         for r in results:
             if r.get("artistName", "").lower() == name_lower:
@@ -189,7 +151,7 @@ class LidarrClient:
         return results[0]
 
     def get_artist(self, lidarr_id: int) -> Optional[dict]:
-        """Get an artist already in Lidarr by their Lidarr ID."""
+        """Get an artist by ID."""
         try:
             return self._get(f"/artist/{lidarr_id}")
         except requests.HTTPError as e:
@@ -198,22 +160,16 @@ class LidarrClient:
             raise
 
     def get_all_artists(self) -> list[dict]:
-        """List all artists currently in Lidarr."""
+        """List all artists in Lidarr."""
         return self._get("/artist")
 
     # ── Add artist ───────────────────────────────────────────────────────────
 
     def add_artist(self, foreign_artist_id: str, root_folder: Optional[str] = None,
                    metadata_profile_id: Optional[int] = None) -> Optional[dict]:
-        """
-        Add an artist to Lidarr by their MusicBrainz/foreign ID.
-        root_folder: full path or friendly name (e.g. "Warren's Music").
-        Returns the added artist dict, or None if already present.
-        """
-        # First, lookup the full artist info
+        """Add an artist to Lidarr. Returns added artist or None."""
         lookup = self._get("/artist/lookup", params={"term": f"lidarr:{foreign_artist_id}"})
         if not lookup:
-            # Try by name
             lookup = self._get("/artist/lookup", params={"term": foreign_artist_id})
         if not lookup:
             log.warning("Could not find artist '%s' in Lidarr lookup", foreign_artist_id)
@@ -221,14 +177,12 @@ class LidarrClient:
 
         artist_data = lookup[0]
 
-        # Check if already added
         existing = self.get_all_artists()
         for a in existing:
             if a.get("foreignArtistId") == artist_data.get("foreignArtistId"):
                 log.info("Artist '%s' already in Lidarr (ID %s)", a["artistName"], a["id"])
                 return None
 
-        # Build the add payload
         artist_data["qualityProfileId"] = self.get_quality_profile_id()
         if metadata_profile_id:
             artist_data["metadataProfileId"] = metadata_profile_id
@@ -239,23 +193,34 @@ class LidarrClient:
         artist_data["monitored"] = True
         artist_data["addOptions"] = {
             "searchForMissingAlbums": False,
-            "monitor": "none",  # Don't monitor any albums — we'll pick them ourselves
+            "monitor": "none",
         }
 
-        # Remove fields Lidarr doesn't accept on POST
         for key in ["id", "statistics", "genres", "tags", "added"]:
             artist_data.pop(key, None)
 
         log.info("Adding artist '%s' to Lidarr (root: %s, profile: %s)",
-                 artist_data.get("artistName"), artist_data["rootFolderPath"], artist_data["qualityProfileId"])
+                 artist_data.get("artistName"), artist_data["rootFolderPath"],
+                 artist_data.get("metadataProfileId"))
 
         try:
             result = self._post("/artist", artist_data)
-            log.info("Added artist '%s' to Lidarr (ID %s)", result.get("artistName"), result.get("id"))
-            # Refresh artist so Lidarr fetches album metadata from MusicBrainz
-            if result.get("id"):
-                self._post("/command", {"name": "RefreshArtist", "artistIds": [result["id"]]})
-                log.info("Triggered refresh for artist ID %s", result["id"])
+            artist_id = result.get("id")
+            log.info("Added artist '%s' to Lidarr (ID %s)", result.get("artistName"), artist_id)
+
+            # Verify artist was added
+            if artist_id:
+                verify = self.get_artist(artist_id)
+                if verify:
+                    log.info("✅ Verified: artist '%s' in Lidarr (monitored=%s, root=%s)",
+                             verify.get("artistName"), verify.get("monitored"),
+                             verify.get("rootFolderPath"))
+                else:
+                    log.warning("⚠️ Artist add returned ID %s but GET returned nothing", artist_id)
+
+                self._post("/command", {"name": "RefreshArtist", "artistIds": [artist_id]})
+                log.info("Triggered refresh for artist ID %s", artist_id)
+
             return result
         except requests.HTTPError as e:
             error_body = ""
@@ -270,16 +235,25 @@ class LidarrClient:
     # ── Album monitoring ─────────────────────────────────────────────────────
 
     def get_artist_albums(self, lidarr_artist_id: int) -> list[dict]:
-        """Get all albums for an artist already in Lidarr."""
+        """Get all albums for an artist."""
         return self._get("/album", params={"artistId": lidarr_artist_id})
 
     def monitor_album(self, album_id: int) -> bool:
-        """Set an album to monitored so Lidarr will download it."""
+        """Set an album to monitored. Verifies after PUT."""
         try:
             album = self._get(f"/album/{album_id}")
             album["monitored"] = True
             self._put(f"/album/{album_id}", album)
-            return True
+
+            # Verify
+            verify = self._get(f"/album/{album_id}")
+            if verify.get("monitored"):
+                log.info("✅ Verified: album %s monitored=True", album_id)
+                return True
+            else:
+                log.warning("⚠️ Album %s monitor PUT succeeded but verified monitored=%s",
+                            album_id, verify.get("monitored"))
+                return False
         except requests.HTTPError as e:
             log.error("Failed to monitor album %s: %s", album_id, e)
             return False
@@ -287,8 +261,9 @@ class LidarrClient:
     def search_album(self, album_id: int) -> bool:
         """Trigger Lidarr to search for and download a specific album."""
         try:
-            self._post("/command", {"name": "AlbumSearch", "albumIds": [album_id]})
-            log.info("Triggered Lidarr search for album ID %s", album_id)
+            result = self._post("/command", {"name": "AlbumSearch", "albumIds": [album_id]})
+            cmd_id = result.get("id")
+            log.info("✅ Triggered Lidarr search for album ID %s (command ID %s)", album_id, cmd_id)
             return True
         except requests.HTTPError as e:
             log.error("Failed to trigger search for album %s: %s", album_id, e)
@@ -310,64 +285,95 @@ class LidarrClient:
             return []
 
     def delete_track_file(self, track_file_id: int) -> bool:
-        """Delete a downloaded track file from disk."""
+        """Delete a downloaded track file from disk. Verifies deletion."""
         try:
             url = f"{self.base}/api/v1/trackfile/{track_file_id}"
             resp = requests.delete(url, headers=self.headers, timeout=30)
             resp.raise_for_status()
-            return True
+
+            # Verify deletion — GET should return 404
+            try:
+                self._get(f"/trackfile/{track_file_id}")
+                log.warning("⚠️ Track file %s delete succeeded but file still accessible", track_file_id)
+                return False
+            except requests.HTTPError as e2:
+                if e2.response is not None and e2.response.status_code == 404:
+                    log.info("✅ Verified: track file %s deleted", track_file_id)
+                    return True
+                return True  # Other error, assume deleted
         except requests.HTTPError as e:
             log.error("Failed to delete track file %s: %s", track_file_id, e)
             return False
 
     def unmonitor_album(self, album_id: int) -> bool:
-        """Set an album to unmonitored so Lidarr won't re-download."""
+        """Set an album to unmonitored. Verifies after PUT."""
         try:
             album = self._get(f"/album/{album_id}")
             album["monitored"] = False
             self._put(f"/album/{album_id}", album)
-            return True
+
+            # Verify
+            verify = self._get(f"/album/{album_id}")
+            if not verify.get("monitored"):
+                log.info("✅ Verified: album %s monitored=False", album_id)
+                return True
+            else:
+                log.warning("⚠️ Album %s unmonitor PUT succeeded but verified monitored=%s",
+                            album_id, verify.get("monitored"))
+                return False
         except requests.HTTPError as e:
             log.error("Failed to unmonitor album %s: %s", album_id, e)
             return False
 
     def move_artist(self, lidarr_artist_id: int, new_root_folder: str) -> bool:
-        """Move an artist to a different root folder in Lidarr (updates path + moves files)."""
+        """Move an artist to a different root folder. Verifies path change."""
         try:
             artist = self._get(f"/artist/{lidarr_artist_id}")
+            old_path = artist.get("rootFolderPath", "")
             resolved = self.resolve_root_folder(new_root_folder)
             if not resolved:
                 log.error("Root folder '%s' not found", new_root_folder)
                 return False
+
             artist["rootFolderPath"] = resolved
             self._put(f"/artist/{lidarr_artist_id}", artist)
-            # Trigger actual file move
+
+            # Verify path changed
+            verify = self._get(f"/artist/{lidarr_artist_id}")
+            new_path = verify.get("rootFolderPath", "")
+            if new_path == resolved:
+                log.info("✅ Verified: artist %s moved from %s to %s", lidarr_artist_id, old_path, new_path)
+            else:
+                log.warning("⚠️ Artist %s move: expected %s, got %s", lidarr_artist_id, resolved, new_path)
+
+            # Trigger file move
             self._post("/command", {
                 "name": "MoveArtist",
                 "artistIds": [lidarr_artist_id],
                 "destinationRootFolder": resolved,
             })
-            log.info("Moved artist %s to %s", lidarr_artist_id, resolved)
+            log.info("Triggered MoveArtist command for artist %s", lidarr_artist_id)
             return True
         except requests.HTTPError as e:
             log.error("Failed to move artist %s: %s", lidarr_artist_id, e)
             return False
 
     def get_artist_details(self, lidarr_artist_id: int) -> Optional[dict]:
-        """Get full artist details including rootFolderPath and metadataProfileId."""
+        """Get full artist details."""
         try:
             return self._get(f"/artist/{lidarr_artist_id}")
         except requests.HTTPError:
             return None
 
     def unmonitor_all_albums(self, lidarr_artist_id: int) -> int:
-        """Unmonitor all albums for an artist. Returns count unmonitored."""
+        """Unmonitor all albums for an artist. Verifies each."""
         albums = self.get_artist_albums(lidarr_artist_id)
         count = 0
         for a in albums:
             if a.get("monitored"):
-                self.unmonitor_album(a["id"])
-                count += 1
+                if self.unmonitor_album(a["id"]):
+                    count += 1
+        log.info("✅ Unmonitored %d/%d albums for artist %s", count, len(albums), lidarr_artist_id)
         return count
 
     # ── Track-level monitoring ────────────────────────────────────────────────
@@ -377,27 +383,30 @@ class LidarrClient:
         return self._get("/track", params={"albumId": album_id})
 
     def set_track_monitored(self, track_id: int, monitored: bool) -> bool:
-        """Set a single track's monitored flag. Uses batch endpoint."""
+        """Set a single track's monitored flag. Verifies after PUT."""
         try:
             track = self._get(f"/track/{track_id}")
             track["monitored"] = monitored
             self._put("/track", [track])
-            return True
+
+            # Verify
+            verify = self._get(f"/track/{track_id}")
+            if verify.get("monitored") == monitored:
+                log.info("✅ Verified: track %s monitored=%s", track_id, monitored)
+                return True
+            else:
+                log.warning("⚠️ Track %s: expected monitored=%s, got %s",
+                            track_id, monitored, verify.get("monitored"))
+                return False
         except requests.HTTPError as e:
             log.error("Failed to set track %s monitored=%s: %s", track_id, monitored, e)
             return False
 
     def monitor_specific_tracks(self, album_id: int, track_ids_to_monitor: set[int]) -> dict:
-        """
-        Cherry-pick monitoring: unmonitor ALL tracks on an album, then monitor
-        only the ones in track_ids_to_monitor.
-
-        Returns {"monitored": int, "unmonitored": int, "errors": int}.
-        """
+        """Batch update track monitoring. Verifies after PUT."""
         tracks = self.get_album_tracks(album_id)
         stats = {"monitored": 0, "unmonitored": 0, "errors": 0}
 
-        # Build the batch update — set all tracks in one PUT
         updated_tracks = []
         for track in tracks:
             tid = track["id"]
@@ -416,11 +425,27 @@ class LidarrClient:
         if updated_tracks:
             try:
                 self._put("/track", updated_tracks)
+
+                # Verify all tracks
+                verify_tracks = self.get_album_tracks(album_id)
+                verify_map = {t["id"]: t.get("monitored") for t in verify_tracks}
+
                 for t in updated_tracks:
-                    if t["monitored"]:
-                        stats["monitored"] += 1
+                    tid = t["id"]
+                    expected = t["monitored"]
+                    actual = verify_map.get(tid)
+                    if actual == expected:
+                        if expected:
+                            stats["monitored"] += 1
+                        else:
+                            stats["unmonitored"] += 1
                     else:
-                        stats["unmonitored"] += 1
+                        log.warning("⚠️ Track %s: expected monitored=%s, verified=%s",
+                                    tid, expected, actual)
+                        stats["errors"] += 1
+
+                log.info("✅ Batch track update: %d monitored, %d unmonitored, %d errors",
+                         stats["monitored"], stats["unmonitored"], stats["errors"])
             except requests.HTTPError as e:
                 log.error("Failed to batch update tracks: %s", e)
                 stats["errors"] += len(updated_tracks)

@@ -288,6 +288,28 @@ lidarr-hits-bot/
 
 ## Troubleshooting
 
+**Resetting the Database (start fresh):**
+
+The SQLite database is stored in a Docker volume. To wipe everything and start fresh:
+
+```bash
+# Stop the container
+docker stop lidarr-hits-bot
+
+# Remove the volume (deletes all data)
+docker volume rm lidarr-hits-bot_bot-data
+
+# Restart (creates fresh database)
+docker start lidarr-hits-bot
+```
+
+Or in Portainer:
+1. Go to **Volumes** → find `lidarr-hits-bot_bot-data`
+2. **Remove** it
+3. Go to **Stacks** → `lidarr-hits-bot` → **Redeploy**
+
+This clears: watchlist, settings, album status, never-prune list, check history.
+
 **Bot doesn't respond to commands:**
 - Make sure Message Content Intent is enabled in the Discord Developer Portal
 - Check the bot has permissions in the channel

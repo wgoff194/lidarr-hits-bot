@@ -76,6 +76,42 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
     await ctx.send(f"❌ Error: {error}")
 
 
+async def get_thread_channel(ctx: commands.Context) -> discord.abc.Messageable:
+    """
+    If already in a thread, return it. Otherwise create a new thread
+    from the invoking message and return that.
+    """
+    if isinstance(ctx.channel, discord.Thread):
+        return ctx.channel
+
+    # Create a thread from the command message
+    thread_name = f"{ctx.command.name} — {ctx.author.display_name}"
+    try:
+        thread = await ctx.message.create_thread(
+            name=thread_name[:100],  # Discord limit
+            auto_archive_duration=43200,  # 30 days (requires server boost level 2, falls back to max available)
+        )
+        return thread
+    except discord.HTTPException:
+        # Fallback: if thread creation fails (e.g. already in a thread, no permission)
+        return ctx.channel
+
+
+@bot.before_invoke
+async def auto_thread(ctx: commands.Context):
+    """Auto-create a thread for every command unless already in one."""
+    thread_ch = await get_thread_channel(ctx)
+    ctx._thread_channel = thread_ch
+
+    # Monkey-patch ctx.send to route to the thread
+    original_send = ctx.send
+
+    async def send_to_thread(*args, **kwargs):
+        return await thread_ch.send(*args, **kwargs)
+
+    ctx.send = send_to_thread
+
+
 # ── Interactive Add Artist UI ─────────────────────────────────────────────────
 
 
@@ -846,6 +882,62 @@ class UpdatePickerView(discord.ui.View):
             item.disabled = True
 
 
+def _sync_to_lidarr(lidarr, lidarr_id, artist, new_meta, current_meta, new_folder, current_folder):
+    """Sync changes to Lidarr in a background thread. Returns list of change strings."""
+    changes = []
+    try:
+        artist_data = lidarr.get_artist(lidarr_id)
+        if not artist_data:
+            changes.append("  ⚠️ Could not fetch artist from Lidarr")
+            return changes
+
+        log.info("Before update — artist '%s': metadataProfileId=%s, rootFolderPath=%s",
+                 artist["name"], artist_data.get("metadataProfileId"), artist_data.get("rootFolderPath"))
+
+        # Update metadata profile
+        if new_meta and new_meta != current_meta:
+            artist_data["metadataProfileId"] = new_meta
+            log.info("Setting metadataProfileId to %s", new_meta)
+            result = lidarr._put(f"/artist/{lidarr_id}", artist_data)
+            log.info("PUT response — metadataProfileId=%s", result.get("metadataProfileId"))
+
+            verify = lidarr.get_artist(lidarr_id)
+            if verify.get("metadataProfileId") == new_meta:
+                log.info("✅ Metadata profile confirmed in Lidarr")
+            else:
+                log.warning("⚠️ Metadata mismatch! Sent %s, got %s", new_meta, verify.get("metadataProfileId"))
+
+        # Move artist if folder changed
+        if new_folder and new_folder != current_folder:
+            if lidarr.move_artist(lidarr_id, new_folder):
+                changes.append("  ✅ Moved in Lidarr")
+            else:
+                changes.append("  ⚠️ Failed to move in Lidarr")
+
+        changes.append("  ✅ Synced to Lidarr")
+
+        # If metadata changed, unmonitor all albums
+        if new_meta and new_meta != current_meta:
+            artist_data["monitored"] = False
+            lidarr._put(f"/artist/{lidarr_id}", artist_data)
+            albums = lidarr.get_artist_albums(lidarr_id)
+            unmonitored = 0
+            for a in albums:
+                if a.get("monitored"):
+                    lidarr.unmonitor_album(a["id"])
+                    unmonitored += 1
+            artist_data["monitored"] = True
+            lidarr._put(f"/artist/{lidarr_id}", artist_data)
+            for a in albums:
+                db.set_setting(f"pruned_{artist['id']}_{a.get('title', '')}", "")
+            changes.append(f"  ↳ Unmonitored all types ({unmonitored} album(s))")
+
+    except Exception as e:
+        changes.append(f"  ⚠️ Lidarr sync failed: {e}")
+
+    return changes
+
+
 @bot.command(name="update")
 async def update_cmd(ctx: commands.Context, *, artist_name: str = None):
     """Update an artist's settings — folder, mode, threshold, metadata profile."""
@@ -964,57 +1056,14 @@ async def update_cmd(ctx: commands.Context, *, artist_name: str = None):
         changes.append(f"📀 Metadata → {meta_display}")
         lidarr_changed = True
 
-    # Sync all changes to Lidarr in one PUT
+    # Sync all changes to Lidarr in a thread
     if lidarr_changed and lidarr_id and lidarr:
-        try:
-            artist_data = lidarr.get_artist(lidarr_id)
-            if artist_data:
-                log.info("Before update — artist '%s': metadataProfileId=%s, rootFolderPath=%s",
-                         artist["name"], artist_data.get("metadataProfileId"), artist_data.get("rootFolderPath"))
-
-                # Update metadata profile
-                if view.selected_metadata_profile and view.selected_metadata_profile != current_meta:
-                    artist_data["metadataProfileId"] = view.selected_metadata_profile
-                    log.info("Setting metadataProfileId to %s", view.selected_metadata_profile)
-                    result = lidarr._put(f"/artist/{lidarr_id}", artist_data)
-                    log.info("PUT response — metadataProfileId=%s", result.get("metadataProfileId"))
-
-                    # Verify it stuck
-                    verify = lidarr.get_artist(lidarr_id)
-                    log.info("After PUT verify — metadataProfileId=%s", verify.get("metadataProfileId"))
-                    if verify.get("metadataProfileId") == view.selected_metadata_profile:
-                        log.info("✅ Metadata profile confirmed in Lidarr")
-                    else:
-                        log.warning("⚠️ Metadata profile mismatch! Sent %s, got %s",
-                                    view.selected_metadata_profile, verify.get("metadataProfileId"))
-
-                # Move artist if folder changed (triggers file move)
-                if new_folder and new_folder != current_folder:
-                    if lidarr.move_artist(lidarr_id, new_folder):
-                        changes.append("  ✅ Moved in Lidarr")
-                    else:
-                        changes.append("  ⚠️ Failed to move in Lidarr")
-
-                changes.append("  ✅ Synced to Lidarr")
-
-                # If metadata changed, unmonitor all albums
-                if view.selected_metadata_profile and view.selected_metadata_profile != current_meta:
-                    artist_data["monitored"] = False
-                    lidarr._put(f"/artist/{lidarr_id}", artist_data)
-                    albums = lidarr.get_artist_albums(lidarr_id)
-                    unmonitored = 0
-                    for a in albums:
-                        if a.get("monitored"):
-                            lidarr.unmonitor_album(a["id"])
-                            unmonitored += 1
-                    artist_data["monitored"] = True
-                    lidarr._put(f"/artist/{lidarr_id}", artist_data)
-                    # Clear pruned state
-                    for a in albums:
-                        db.set_setting(f"pruned_{artist['id']}_{a.get('title', '')}", "")
-                    changes.append(f"  ↳ Unmonitored all types ({unmonitored} album(s))")
-        except Exception as e:
-            changes.append(f"  ⚠️ Lidarr sync failed: {e}")
+        loop = asyncio.get_event_loop()
+        sync_result = await loop.run_in_executor(
+            None, _sync_to_lidarr, lidarr, lidarr_id, artist,
+            view.selected_metadata_profile, current_meta, new_folder, current_folder
+        )
+        changes.extend(sync_result)
 
     if not changes:
         await ctx.send(f"No changes made to **{artist['name']}**.")
@@ -2096,7 +2145,8 @@ async def keep_cmd(ctx: commands.Context):
     try:
         from lidarr_hits_bot.clients.lidarr import LidarrClient
         lidarr = LidarrClient()
-        albums = lidarr.get_artist_albums(lidarr_id)
+        loop = asyncio.get_event_loop()
+        albums = await loop.run_in_executor(None, lidarr.get_artist_albums, lidarr_id)
     except Exception as e:
         await ctx.send(f"❌ Lidarr error: {e}")
         return
@@ -2121,7 +2171,7 @@ async def keep_cmd(ctx: commands.Context):
 
     # Step 3: Pick tracks
     try:
-        tracks = lidarr.get_album_tracks(album["id"])
+        tracks = await loop.run_in_executor(None, lidarr.get_album_tracks, album["id"])
     except Exception:
         tracks = []
 
@@ -2204,18 +2254,32 @@ async def daily_check_loop():
     results = await loop.run_in_executor(None, run_daily_check)
     report = format_results(results)
 
-    # Send to configured channel
+    # Send to configured channel in a new thread
     channel_id = Config.REPORT_CHANNEL_ID
     if channel_id:
         channel = bot.get_channel(channel_id)
         if channel:
+            # Create a thread for today's report
+            today = datetime.now().strftime("%Y-%m-%d")
+            thread_name = f"📊 Daily Report — {today}"
+            try:
+                thread = await channel.create_thread(
+                    name=thread_name,
+                    auto_archive_duration=43200,  # 30 days
+                )
+                report_channel = thread
+                log.info("Created daily report thread: %s", thread_name)
+            except discord.HTTPException as e:
+                log.warning("Failed to create thread, falling back to channel: %s", e)
+                report_channel = channel
+
             while report:
                 chunk = report[:1990]
                 if len(report) > 1990:
                     split_at = chunk.rfind("\n")
                     if split_at > 0:
                         chunk = report[:split_at]
-                await channel.send(chunk)
+                await report_channel.send(chunk)
                 report = report[len(chunk):]
 
             # Check pending downloads and auto-prune completed ones
@@ -2223,7 +2287,7 @@ async def daily_check_loop():
             dl_results = await loop.run_in_executor(None, check_downloads)
             dl_report = format_download_check_results(dl_results)
             if "No newly" not in dl_report:
-                await channel.send(dl_report)
+                await report_channel.send(dl_report)
         else:
             log.error("Report channel %s not found!", channel_id)
     else:

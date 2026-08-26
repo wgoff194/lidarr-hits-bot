@@ -175,13 +175,18 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
                 try:
                     lidarr_tracks = lidarr.get_album_tracks(album_id)
                     downloaded_tracks = {t.get("title", "").strip().lower() for t in lidarr_tracks if t.get("hasFile")}
+                    album_monitored = matched.get("monitored", False)
                 except Exception:
                     downloaded_tracks = set()
+                    album_monitored = False
 
                 # Check which popular tracks are already downloaded
                 popular_names = {tp.name.strip().lower() for tp in album.track_popularities if tp.popularity >= Config.POPULARITY_THRESHOLD}
                 already_have = popular_names & downloaded_tracks
                 missing = popular_names - downloaded_tracks
+
+                log.info("Album '%s': %d popular tracks, %d downloaded, %d missing, monitored=%s",
+                         album.name, len(popular_names), len(already_have), len(missing), album_monitored)
 
                 if popular_names and not missing:
                     # All popular tracks already downloaded
@@ -191,6 +196,7 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
                     continue
 
                 # ── Album-level: monitor and search ─────────────────────
+                log.info("Monitoring + searching album '%s' (ID %s) in Lidarr...", album.name, album_id)
                 success = lidarr.monitor_and_search_album(album_id)
                 db.log_check(artist["id"], album.name, album.deezer_url, album.avg_popularity, success)
                 if success:
