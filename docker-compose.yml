@@ -3,8 +3,17 @@ services:
     build: .
     container_name: lidarr-hits-bot
     restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      - DISCORD_TOKEN
+      - COMMAND_PREFIX
+      - REPORT_CHANNEL_ID
+      - POPULARITY_THRESHOLD
+      - LIDARR_URL
+      - LIDARR_API_KEY
+      - LIDARR_QUALITY_PROFILE
+      - DOWNLOAD_MODE
+      - DAILY_CHECK_CRON
+      - TIMEZONE
     volumes:
       # Persist the SQLite database
       - bot-data:/data

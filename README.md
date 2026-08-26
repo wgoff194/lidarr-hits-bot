@@ -67,6 +67,8 @@ git push -u origin main
    - **Compose path:** `docker-compose.yml`
 6. Scroll down to **Environment variables** and click **Add an environment variable** for each one:
 
+   > **Important:** Add these through Portainer's UI — do NOT create a `.env` file. Portainer injects these directly into the container.
+
    | Variable | Value |
    |---|---|
    | `DISCORD_TOKEN` | Your Discord bot token |
