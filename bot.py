@@ -928,32 +928,30 @@ async def update_cmd(ctx: commands.Context, *, artist_name: str = None):
     # Step 4: Apply changes
     changes = []
 
-    # Folder change — move in Lidarr
+    # ── Apply changes to Lidarr ──────────────────────────────────────────
+    lidarr_id = artist.get("lidarr_id")
+    lidarr_changed = False
+
+    # Folder change
     new_folder = view.selected_folder
     if new_folder and new_folder != current_folder:
         db.set_artist_root_folder(artist["name"], new_folder)
         folder_display = new_folder.rstrip("/").split("/")[-1]
         changes.append(f"📁 Folder → {folder_display}")
-        # Move in Lidarr
-        lidarr_id = artist.get("lidarr_id")
-        if lidarr_id and lidarr:
-            if lidarr.move_artist(lidarr_id, new_folder):
-                changes.append("  ✅ Moved in Lidarr")
-            else:
-                changes.append("  ⚠️ Failed to move in Lidarr")
+        lidarr_changed = True
 
-    # Mode change
+    # Mode change (bot-only, no Lidarr sync needed)
     if view.selected_mode != current_mode:
         db.set_setting(f"mode_{artist['name']}", view.selected_mode)
         changes.append(f"🎛️ Mode → {view.selected_mode}")
 
-    # Threshold change
+    # Threshold change (bot-only)
     if view.threshold != current_threshold:
         Config.POPULARITY_THRESHOLD = view.threshold
         db.set_setting("popularity_threshold", str(view.threshold))
         changes.append(f"📊 Threshold → {view.threshold}/100")
 
-    # Metadata profile change — unmonitor all albums, clear pruned state
+    # Metadata profile change
     if view.selected_metadata_profile and view.selected_metadata_profile != current_meta:
         db.set_setting(f"meta_profile_{artist['name']}", str(view.selected_metadata_profile))
         meta_display = str(view.selected_metadata_profile)
@@ -962,33 +960,47 @@ async def update_cmd(ctx: commands.Context, *, artist_name: str = None):
                 meta_display = p["name"]
                 break
         changes.append(f"📀 Metadata → {meta_display}")
+        lidarr_changed = True
 
-        # Unmonitor ALL types in Lidarr (artist stays tracked, just not monitoring)
-        lidarr_id = artist.get("lidarr_id")
-        if lidarr_id and lidarr:
-            try:
-                # Set artist monitor to "none" — clears Album, EP, Single, Broadcast
-                artist_data = lidarr.get_artist(lidarr_id)
-                if artist_data:
+    # Sync all changes to Lidarr in one PUT
+    if lidarr_changed and lidarr_id and lidarr:
+        try:
+            artist_data = lidarr.get_artist(lidarr_id)
+            if artist_data:
+                # Update metadata profile
+                if view.selected_metadata_profile and view.selected_metadata_profile != current_meta:
+                    artist_data["metadataProfileId"] = view.selected_metadata_profile
+                    lidarr._put(f"/artist/{lidarr_id}", artist_data)
+                    log.info("Updated metadata profile for %s to %s in Lidarr",
+                             artist["name"], view.selected_metadata_profile)
+
+                # Move artist if folder changed (triggers file move)
+                if new_folder and new_folder != current_folder:
+                    if lidarr.move_artist(lidarr_id, new_folder):
+                        changes.append("  ✅ Moved in Lidarr")
+                    else:
+                        changes.append("  ⚠️ Failed to move in Lidarr")
+
+                changes.append("  ✅ Synced to Lidarr")
+
+                # If metadata changed, unmonitor all albums
+                if view.selected_metadata_profile and view.selected_metadata_profile != current_meta:
                     artist_data["monitored"] = False
                     lidarr._put(f"/artist/{lidarr_id}", artist_data)
-                # Also unmonitor individual albums
-                albums = lidarr.get_artist_albums(lidarr_id)
-                unmonitored = 0
-                for a in albums:
-                    if a.get("monitored"):
-                        lidarr.unmonitor_album(a["id"])
-                        unmonitored += 1
-                # Re-enable artist monitoring (so Lidarr tracks it) but albums stay off
-                if artist_data:
+                    albums = lidarr.get_artist_albums(lidarr_id)
+                    unmonitored = 0
+                    for a in albums:
+                        if a.get("monitored"):
+                            lidarr.unmonitor_album(a["id"])
+                            unmonitored += 1
                     artist_data["monitored"] = True
                     lidarr._put(f"/artist/{lidarr_id}", artist_data)
-                # Clear pruned state so next scan re-evaluates
-                for a in albums:
-                    db.set_setting(f"pruned_{artist['id']}_{a.get('title', '')}", "")
-                changes.append(f"  ↳ Unmonitored all types ({unmonitored} album(s)), will re-scan with new profile")
-            except Exception as e:
-                changes.append(f"  ⚠️ Failed to unmonitor: {e}")
+                    # Clear pruned state
+                    for a in albums:
+                        db.set_setting(f"pruned_{artist['id']}_{a.get('title', '')}", "")
+                    changes.append(f"  ↳ Unmonitored all types ({unmonitored} album(s))")
+        except Exception as e:
+            changes.append(f"  ⚠️ Lidarr sync failed: {e}")
 
     if not changes:
         await ctx.send(f"No changes made to **{artist['name']}**.")

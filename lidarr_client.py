@@ -332,7 +332,7 @@ class LidarrClient:
             return False
 
     def move_artist(self, lidarr_artist_id: int, new_root_folder: str) -> bool:
-        """Move an artist to a different root folder in Lidarr."""
+        """Move an artist to a different root folder in Lidarr (updates path + moves files)."""
         try:
             artist = self._get(f"/artist/{lidarr_artist_id}")
             resolved = self.resolve_root_folder(new_root_folder)
@@ -341,6 +341,12 @@ class LidarrClient:
                 return False
             artist["rootFolderPath"] = resolved
             self._put(f"/artist/{lidarr_artist_id}", artist)
+            # Trigger actual file move
+            self._post("/command", {
+                "name": "MoveArtist",
+                "artistIds": [lidarr_artist_id],
+                "destinationRootFolder": resolved,
+            })
             log.info("Moved artist %s to %s", lidarr_artist_id, resolved)
             return True
         except requests.HTTPError as e:
