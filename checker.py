@@ -268,64 +268,61 @@ def prune_downloaded_albums(artist_filter: str = None, force: bool = False) -> l
                 continue
 
             # Get downloaded track files
-            track_files = lidarr.get_album_track_files(album_id)
-            if not track_files:
-                continue
-
-            # Get Lidarr tracks for this album to match with files
             lidarr_tracks = lidarr.get_album_tracks(album_id)
             if not lidarr_tracks:
                 continue
 
-            # Build a map of trackId -> track info
+            # Filter to only tracks that have downloaded files
+            downloaded_tracks = [t for t in lidarr_tracks if t.get("hasFile")]
+            if not downloaded_tracks:
+                continue
+
+            # Build a map of track info
             track_map = {t["id"]: t for t in lidarr_tracks}
 
-            # Score each track file
-            keep_files: list[dict] = []
-            prune_files: list[dict] = []
+            # Score each downloaded track
+            keep_tracks: list[dict] = []
+            prune_tracks: list[dict] = []
 
-            for tf in track_files:
-                track_id = tf.get("trackId")
-                track_info = track_map.get(track_id, {})
-                track_title = track_info.get("title", "Unknown")
-
-                # Calculate popularity score
+            for track in downloaded_tracks:
                 score = music._calculate_track_score(
-                    track_id, top_track_ids, top_track_ranks, len(top_tracks)
+                    track["id"], top_track_ids, top_track_ranks, len(top_tracks)
                 )
 
                 if score >= Config.POPULARITY_THRESHOLD:
-                    keep_files.append(tf)
+                    keep_tracks.append(track)
                 else:
-                    prune_files.append(tf)
+                    prune_tracks.append(track)
+
+            log.info("Album '%s': %d downloaded, %d above threshold, %d below",
+                     album_name, len(downloaded_tracks), len(keep_tracks), len(prune_tracks))
 
             # Only prune if there are tracks to prune AND tracks to keep
-            if not prune_files or not keep_files:
-                if keep_files:
-                    # All tracks are popular, just mark as pruned
+            if not prune_tracks or not keep_tracks:
+                if keep_tracks:
                     db.set_setting(pruned_key, "all_popular")
                 continue
 
-            # Delete below-threshold tracks
+            # Delete below-threshold track files
             deleted = 0
-            for tf in prune_files:
-                if lidarr.delete_track_file(tf["id"]):
+            for track in prune_tracks:
+                track_file_id = track.get("trackFileId")
+                if track_file_id and lidarr.delete_track_file(track_file_id):
                     deleted += 1
-                    log.info("Pruned '%s' from '%s' by %s", 
-                             track_map.get(tf.get("trackId"), {}).get("title", "?"),
-                             album_name, artist["name"])
+                    log.info("Pruned '%s' from '%s' by %s",
+                             track.get("title", "?"), album_name, artist["name"])
 
             # Unmonitor the album so Lidarr doesn't re-download
             lidarr.unmonitor_album(album_id)
 
             # Mark as pruned
-            db.set_setting(pruned_key, f"kept:{len(keep_files)}_pruned:{deleted}")
+            db.set_setting(pruned_key, f"kept:{len(keep_tracks)}_pruned:{deleted}")
 
             results.append(PruneResult(
                 artist_name=artist["name"],
                 album_name=album_name,
-                total_tracks=len(track_files),
-                kept_tracks=len(keep_files),
+                total_tracks=len(downloaded_tracks),
+                kept_tracks=len(keep_tracks),
                 pruned_tracks=deleted,
             ))
 
