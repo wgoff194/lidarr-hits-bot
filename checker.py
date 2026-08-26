@@ -93,47 +93,54 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
         popular_albums = [a for a in new_albums if music.should_download_album(a)]
         result.new_albums_found = len(popular_albums)
 
-        for album in popular_albums:
-            # ── Step 4: Ensure artist is in Lidarr ───────────────────────
-            lidarr_artist_id = artist.get("lidarr_id")
-            if not lidarr_artist_id:
-                lidarr_artist = lidarr.lookup_artist(artist["name"])
-                if lidarr_artist:
-                    all_lidarr = lidarr.get_all_artists()
-                    existing = next(
-                        (a for a in all_lidarr if a.get("foreignArtistId") == lidarr_artist.get("foreignArtistId")),
-                        None,
+        # ── Step 3.5: Ensure artist is in Lidarr (once per artist) ────────
+        lidarr_artist_id = artist.get("lidarr_id")
+        lidarr_albums = []
+        if not lidarr_artist_id:
+            lidarr_artist = lidarr.lookup_artist(artist["name"])
+            if lidarr_artist:
+                all_lidarr = lidarr.get_all_artists()
+                existing = next(
+                    (a for a in all_lidarr if a.get("foreignArtistId") == lidarr_artist.get("foreignArtistId")),
+                    None,
+                )
+                if existing:
+                    lidarr_artist_id = existing["id"]
+                else:
+                    # Determine root folder: per-artist override > default setting > .env
+                    root_folder = artist.get("root_folder")
+                    if not root_folder:
+                        root_folder = db.get_setting("default_root_folder")
+                    # Determine metadata profile: per-artist setting > auto-resolve
+                    meta_profile_id = db.get_setting(f"meta_profile_{artist['name']}")
+                    if meta_profile_id:
+                        meta_profile_id = int(meta_profile_id)
+                    added = lidarr.add_artist(
+                        lidarr_artist.get("foreignArtistId", artist["name"]),
+                        root_folder=root_folder,
+                        metadata_profile_id=meta_profile_id,
                     )
-                    if existing:
-                        lidarr_artist_id = existing["id"]
+                    if added:
+                        lidarr_artist_id = added["id"]
                     else:
-                        # Determine root folder: per-artist override > default setting > .env
-                        root_folder = artist.get("root_folder")
-                        if not root_folder:
-                            root_folder = db.get_setting("default_root_folder")
-                        # Determine metadata profile: per-artist setting > auto-resolve
-                        meta_profile_id = db.get_setting(f"meta_profile_{artist['name']}")
-                        if meta_profile_id:
-                            meta_profile_id = int(meta_profile_id)
-                        added = lidarr.add_artist(
-                            lidarr_artist.get("foreignArtistId", artist["name"]),
-                            root_folder=root_folder,
-                            metadata_profile_id=meta_profile_id,
-                        )
-                        if added:
-                            lidarr_artist_id = added["id"]
-                        else:
-                            result.errors.append("Could not add artist to Lidarr")
-                            db.log_check(artist["id"], album.name, album.deezer_url, album.avg_popularity, False)
-                            continue
-                    db.update_artist_lidarr_id(artist["name"], lidarr_artist_id)
+                        result.errors.append("Could not add artist to Lidarr")
+                db.update_artist_lidarr_id(artist["name"], lidarr_artist_id)
 
-            # ── Step 5: Find the album in Lidarr ─────────────────────────
+        # Fetch Lidarr albums ONCE for this artist
+        if lidarr_artist_id:
             try:
                 lidarr_albums = lidarr.get_artist_albums(lidarr_artist_id)
                 log.info("Found %d albums in Lidarr for artist ID %s", len(lidarr_albums), lidarr_artist_id)
 
-                # If no albums found, the stored lidarr_id might be stale — re-resolve
+                # If no albums found, wait for Lidarr refresh (artist just added)
+                if not lidarr_albums:
+                    import time
+                    log.info("Waiting 15s for Lidarr to populate albums...")
+                    time.sleep(15)
+                    lidarr_albums = lidarr.get_artist_albums(lidarr_artist_id)
+                    log.info("After wait: found %d albums for artist ID %s", len(lidarr_albums), lidarr_artist_id)
+
+                # If still no albums, the stored lidarr_id might be stale — re-resolve
                 if not lidarr_albums:
                     log.warning("No albums for artist ID %s, re-resolving from Lidarr...", lidarr_artist_id)
                     all_lidarr = lidarr.get_all_artists()
@@ -144,6 +151,16 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
                             lidarr_albums = lidarr.get_artist_albums(lidarr_artist_id)
                             log.info("Re-resolved to artist ID %s, found %d albums", lidarr_artist_id, len(lidarr_albums))
                             break
+            except Exception as e:
+                log.warning("Failed to fetch Lidarr albums: %s", e)
+
+        for album in popular_albums:
+            # ── Step 4: Find the album in Lidarr ─────────────────────────
+            try:
+                if not lidarr_artist_id or not lidarr_albums:
+                    db.log_check(artist["id"], album.name, album.deezer_url, album.avg_popularity, False)
+                    result.skipped_albums.append(f"{album.name} (not in Lidarr DB yet)")
+                    continue
 
                 matched = _match_album(album.name, lidarr_albums)
 
