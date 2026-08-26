@@ -100,16 +100,27 @@ async def get_thread_channel(ctx: commands.Context) -> discord.abc.Messageable:
 @bot.before_invoke
 async def auto_thread(ctx: commands.Context):
     """Auto-create a thread for every command unless already in one."""
-    thread_ch = await get_thread_channel(ctx)
-    ctx._thread_channel = thread_ch
+    try:
+        if isinstance(ctx.channel, discord.Thread):
+            ctx._thread_channel = ctx.channel
+            return
 
-    # Monkey-patch ctx.send to route to the thread
-    original_send = ctx.send
+        thread_name = ctx.command.name
+        thread = await ctx.message.create_thread(
+            name=thread_name[:100],
+            auto_archive_duration=43200,
+        )
+        ctx._thread_channel = thread
+        log.info("Created thread '%s' for command '%s'", thread_name, ctx.command.name)
 
-    async def send_to_thread(*args, **kwargs):
-        return await thread_ch.send(*args, **kwargs)
+        # Route ctx.send to the thread
+        async def send_to_thread(*args, **kwargs):
+            return await thread.send(*args, **kwargs)
+        ctx.send = send_to_thread
 
-    ctx.send = send_to_thread
+    except Exception as e:
+        log.warning("Failed to create thread for '%s': %s", ctx.command.name, e)
+        ctx._thread_channel = ctx.channel
 
 
 # ── Interactive Add Artist UI ─────────────────────────────────────────────────
