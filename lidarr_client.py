@@ -193,12 +193,25 @@ class LidarrClient:
             "searchForMissingAlbums": False,  # Don't auto-grab everything!
         }
 
+        # Remove fields Lidarr doesn't accept on POST
+        for key in ["id", "statistics", "genres", "tags", "added"]:
+            artist_data.pop(key, None)
+
+        log.info("Adding artist '%s' to Lidarr (root: %s, profile: %s)",
+                 artist_data.get("artistName"), artist_data["rootFolderPath"], artist_data["qualityProfileId"])
+
         try:
             result = self._post("/artist", artist_data)
             log.info("Added artist '%s' to Lidarr (ID %s)", result.get("artistName"), result.get("id"))
             return result
         except requests.HTTPError as e:
-            log.error("Failed to add artist to Lidarr: %s", e)
+            error_body = ""
+            if e.response is not None:
+                try:
+                    error_body = e.response.json()
+                except Exception:
+                    error_body = e.response.text[:500]
+            log.error("Failed to add artist to Lidarr: %s — %s", e, error_body)
             return None
 
     # ── Album monitoring ─────────────────────────────────────────────────────
