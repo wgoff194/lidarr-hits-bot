@@ -19,6 +19,7 @@ class LidarrClient:
         self.base = Config.LIDARR_URL.rstrip("/")
         self.headers = {"X-Api-Key": Config.LIDARR_API_KEY}
         self._quality_profile_id: Optional[int] = None
+        self._metadata_profile_id: Optional[int] = None
 
     def _get(self, path: str, params: dict | None = None) -> dict | list:
         url = f"{self.base}/api/v1{path}"
@@ -61,6 +62,16 @@ class LidarrClient:
         raise RuntimeError("No Lidarr quality profiles found")
 
     # ── Root folders ─────────────────────────────────────────────────────────
+
+    def get_metadata_profile_id(self) -> int:
+        """Get the first metadata profile ID (cached)."""
+        if self._metadata_profile_id is not None:
+            return self._metadata_profile_id
+        profiles = self._get("/metadataprofile")
+        if profiles:
+            self._metadata_profile_id = profiles[0]["id"]
+            return profiles[0]["id"]
+        raise RuntimeError("No Lidarr metadata profiles found")
 
     def get_root_folders(self) -> list[dict]:
         """
@@ -187,6 +198,7 @@ class LidarrClient:
 
         # Build the add payload
         artist_data["qualityProfileId"] = self.get_quality_profile_id()
+        artist_data["metadataProfileId"] = self.get_metadata_profile_id()
         artist_data["rootFolderPath"] = self.get_root_folder(root_folder)
         artist_data["monitored"] = True
         artist_data["addOptions"] = {
