@@ -387,7 +387,8 @@ async def help_cmd(ctx: commands.Context):
             f"`{prefix}add <artist>` — Add artist (interactive setup dialog)\n"
             f"`{prefix}remove <artist>` — Stop tracking\n"
             f"`{prefix}list` — Show watchlist\n"
-            f"`{prefix}check` — Run popularity check now\n"
+            f"`{prefix}check` — Run popularity check (recent releases)\n"
+            f"`{prefix}scan` — Full catalog scan (pick artist or all)\n"
             f"`{prefix}threshold <0-100>` — View/set popularity threshold\n"
             f"`{prefix}mode <tracks|album>` — Download popular tracks only, or whole albums\n"
             f"`{prefix}folder` — Show/set root folders\n"
@@ -505,10 +506,10 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
     embed.set_footer(text=f"Added by {added_by}")
     await ctx.send(embed=embed)
 
-    # ── Auto-check this artist for popular tracks ────────────────────────
-    await ctx.send(f"🔍 Scanning **{display_name}** for popular tracks...")
+    # ── Auto-check this artist for popular tracks (full catalog scan) ───
+    await ctx.send(f"🔍 Scanning **{display_name}**'s full catalog for hits...")
     loop = asyncio.get_event_loop()
-    results = await loop.run_in_executor(None, run_daily_check, display_name)
+    results = await loop.run_in_executor(None, run_daily_check, display_name, True)
     report = format_results(results)
     await ctx.send(report)
 
@@ -582,6 +583,198 @@ async def manual_check(ctx: commands.Context):
         chunk = report[:1990]
         if len(report) > 1990:
             # Find last newline to split cleanly
+            split_at = chunk.rfind("\n")
+            if split_at > 0:
+                chunk = report[:split_at]
+        await ctx.send(chunk)
+        report = report[len(chunk):]
+
+
+# ── Full Scan UI ─────────────────────────────────────────────────────────────
+
+
+class ScanConfirmView(discord.ui.View):
+    """Confirmation prompt for scanning all artists."""
+
+    def __init__(self, author_id: int):
+        super().__init__(timeout=60)
+        self.author_id = author_id
+        self.confirmed = False
+
+    @discord.ui.button(label="⚠️ Yes, scan all", style=discord.ButtonStyle.danger)
+    async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours to confirm.", ephemeral=True)
+            return
+        self.confirmed = True
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="🔍 Full Catalog Scan — All Artists",
+                description="Scanning... this may take a while.",
+                color=0xFFA500,
+            ),
+            view=self,
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours to cancel.", ephemeral=True)
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="❌ Cancelled",
+                description="Scan cancelled.",
+                color=0xFF0000,
+            ),
+            view=self,
+        )
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
+class ScanArtistView(discord.ui.View):
+    """Dropdown to pick an artist + buttons for scan/cancel/all."""
+
+    def __init__(self, author_id: int, artists: list[dict]):
+        super().__init__(timeout=120)
+        self.author_id = author_id
+        self.artists = artists
+        self.selected: Optional[str] = None  # artist name or "__all__"
+        self.confirmed = False
+
+        # Build dropdown — individual artists only
+        options = []
+        for a in artists:
+            options.append(discord.SelectOption(label=a["name"], value=a["name"]))
+        self.artist_select.options = options[:25]
+
+    @discord.ui.select(placeholder="Pick an artist...", min_values=1, max_values=1, row=0)
+    async def artist_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.selected = select.values[0]
+        for opt in select.options:
+            opt.default = opt.value == self.selected
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="🔍 Scan Artist", style=discord.ButtonStyle.success, row=1)
+    async def go_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        if not self.selected:
+            await interaction.response.send_message("❌ Pick an artist first.", ephemeral=True)
+            return
+        self.confirmed = True
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title=f"🔍 Scanning: {self.selected}",
+                description="Running full catalog scan...",
+                color=0x1DB954,
+            ),
+            view=self,
+        )
+
+    @discord.ui.button(label="📀 All Artists", style=discord.ButtonStyle.danger, row=1)
+    async def all_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.selected = "__all__"
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary, row=1)
+    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            embed=discord.Embed(title="❌ Cancelled", color=0xFF0000),
+            view=self,
+        )
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
+@bot.command(name="scan")
+async def scan_cmd(ctx: commands.Context):
+    """Full catalog scan — pick an artist or scan all."""
+    artists = db.list_artists()
+    if not artists:
+        await ctx.send("📭 Watchlist is empty. Add an artist with `?add <name>` first.")
+        return
+
+    view = ScanArtistView(ctx.author.id, artists)
+    embed = discord.Embed(
+        title="🔍 Full Catalog Scan",
+        description=(
+            f"Pick an artist to scan their **entire catalog** for hits.\n"
+            f"Or select **All Artists** to scan everyone.\n\n"
+            f"Currently tracking **{len(artists)}** artist(s)."
+        ),
+        color=0x1DB954,
+    )
+    embed.set_footer(text="Select an artist from the dropdown • Times out in 2 min")
+    await ctx.send(embed=embed, view=view)
+    await view.wait()
+
+    if not view.selected:
+        return
+
+    if view.selected == "__all__":
+        # Send confirmation warning
+        confirm_view = ScanConfirmView(ctx.author.id)
+        confirm_embed = discord.Embed(
+            title="⚠️ Scan ALL Artists?",
+            description=(
+                f"You're about to scan **{len(artists)} artists**' full catalogs.\n\n"
+                "This checks every artist's top tracks and queues popular albums.\n"
+                "**May take several minutes and trigger many downloads.**\n\n"
+                "Are you sure?"
+            ),
+            color=0xFFA500,
+        )
+        await ctx.send(embed=confirm_embed, view=confirm_view)
+        await confirm_view.wait()
+
+        if not confirm_view.confirmed:
+            return
+
+        await ctx.send(f"🔍 Scanning **{len(artists)} artists**... this will take a while.")
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(None, run_daily_check, None, True)
+    else:
+        if not view.confirmed:
+            return
+        await ctx.send(f"🔍 Scanning **{view.selected}**'s full catalog for hits...")
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(None, run_daily_check, view.selected, True)
+
+    report = format_results(results)
+    while report:
+        chunk = report[:1990]
+        if len(report) > 1990:
             split_at = chunk.rfind("\n")
             if split_at > 0:
                 chunk = report[:split_at]

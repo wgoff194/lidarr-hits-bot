@@ -211,6 +211,93 @@ class MusicClient:
             return True
         return False
 
+    def get_artist_top_albums(self, artist_id: str) -> list[AlbumInfo]:
+        """
+        Full-catalog scan: find albums containing the artist's top tracks.
+        Used for older bands with no recent releases — grabs the hits from
+        their entire career.
+        """
+        top_tracks = self.get_artist_top_tracks(artist_id)
+        if not top_tracks:
+            return []
+
+        # Build popularity ranking
+        top_track_ids: set[int] = set()
+        top_track_ranks: dict[int, int] = {}
+        for i, t in enumerate(top_tracks):
+            tid = t.get("id")
+            if tid:
+                top_track_ids.add(tid)
+                top_track_ranks[tid] = i
+
+        # Group top tracks by album
+        album_tracks: dict[str, dict] = {}  # album_id -> {info, tracks[]}
+        for track in top_tracks:
+            album_data = track.get("album", {})
+            aid = str(album_data.get("id", ""))
+            if not aid:
+                continue
+            if aid not in album_tracks:
+                album_tracks[aid] = {
+                    "info": album_data,
+                    "tracks": [],
+                }
+            album_tracks[aid]["tracks"].append(track)
+
+        # Build AlbumInfo for each album that has top tracks
+        results: list[AlbumInfo] = []
+        for aid, data in album_tracks.items():
+            album_info = data["info"]
+            tracks_in_album = data["tracks"]
+
+            # Get full album track list to show all tracks
+            try:
+                full_tracks_resp = _get(f"/album/{aid}/tracks")
+                all_tracks = full_tracks_resp.get("data", [])
+            except Exception:
+                all_tracks = tracks_in_album
+
+            # Score all tracks
+            popularities: list[int] = []
+            top_names: list[str] = []
+            track_pops: list[TrackPopularity] = []
+
+            for track in all_tracks:
+                tid = track.get("id")
+                tname = track.get("title", "Unknown")
+                score = self._calculate_track_score(tid, top_track_ids, top_track_ranks, len(top_tracks))
+                popularities.append(score)
+                track_pops.append(TrackPopularity(name=tname, popularity=score))
+                if score >= Config.POPULARITY_THRESHOLD:
+                    top_names.append(tname)
+
+            avg_pop = sum(popularities) / len(popularities) if popularities else 0
+
+            # Parse release date
+            rd = album_info.get("release_date", "")
+            if not rd:
+                rd = "0000-00-00"
+
+            record_type = album_info.get("record_type", "album")
+            if record_type not in ("album", "single", "ep"):
+                record_type = "album"
+
+            results.append(AlbumInfo(
+                name=album_info.get("title", "Unknown"),
+                deezer_id=aid,
+                deezer_url=album_info.get("link", ""),
+                release_date=rd,
+                album_type=record_type,
+                total_tracks=len(all_tracks),
+                avg_popularity=round(avg_pop, 1),
+                top_track_names=top_names[:5],
+                track_popularities=track_pops,
+            ))
+
+        # Sort by number of popular tracks (most hits first)
+        results.sort(key=lambda a: len(a.top_track_names), reverse=True)
+        return results
+
 
 def _normalize_artist(deezer_artist: dict) -> dict:
     """Normalize a Deezer artist dict to the format the bot expects."""

@@ -27,11 +27,12 @@ class CheckResult:
     skipped_albums: list[str] = field(default_factory=list)
 
 
-def run_daily_check(artist_filter: str = None) -> list[CheckResult]:
+def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[CheckResult]:
     """
     Check watched artists for new popular releases.
     If artist_filter is set, only check that one artist.
-    Re-evaluates albums already in Lidarr to catch tracks that became popular.
+    If full_scan is True, scan the artist's entire catalog (top tracks → albums)
+    instead of just the last 90 days. Used on first add.
     Returns a list of per-artist results.
     """
     if artist_filter:
@@ -77,11 +78,14 @@ def run_daily_check(artist_filter: str = None) -> list[CheckResult]:
             spotify_id = found["id"]
             db.update_artist_spotify_id(artist["name"], spotify_id)
 
-        # ── Step 2: Get new releases from Spotify ────────────────────────
+        # ── Step 2: Get releases ──────────────────────────────────────────
         try:
-            new_albums = spotify.get_new_releases(spotify_id, lookback_days=90)
+            if full_scan:
+                new_albums = spotify.get_artist_top_albums(spotify_id)
+            else:
+                new_albums = spotify.get_new_releases(spotify_id, lookback_days=90)
         except Exception as e:
-            result.errors.append(f"Spotify error: {e}")
+            result.errors.append(f"Music API error: {e}")
             results.append(result)
             continue
 
