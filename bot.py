@@ -951,7 +951,7 @@ async def update_cmd(ctx: commands.Context, *, artist_name: str = None):
         db.set_setting("popularity_threshold", str(view.threshold))
         changes.append(f"📊 Threshold → {view.threshold}/100")
 
-    # Metadata profile change
+    # Metadata profile change — unmonitor all albums, clear pruned state
     if view.selected_metadata_profile and view.selected_metadata_profile != current_meta:
         db.set_setting(f"meta_profile_{artist['name']}", str(view.selected_metadata_profile))
         meta_display = str(view.selected_metadata_profile)
@@ -960,6 +960,33 @@ async def update_cmd(ctx: commands.Context, *, artist_name: str = None):
                 meta_display = p["name"]
                 break
         changes.append(f"📀 Metadata → {meta_display}")
+
+        # Unmonitor ALL types in Lidarr (artist stays tracked, just not monitoring)
+        lidarr_id = artist.get("lidarr_id")
+        if lidarr_id and lidarr:
+            try:
+                # Set artist monitor to "none" — clears Album, EP, Single, Broadcast
+                artist_data = lidarr.get_artist(lidarr_id)
+                if artist_data:
+                    artist_data["monitored"] = False
+                    lidarr._put(f"/artist/{lidarr_id}", artist_data)
+                # Also unmonitor individual albums
+                albums = lidarr.get_artist_albums(lidarr_id)
+                unmonitored = 0
+                for a in albums:
+                    if a.get("monitored"):
+                        lidarr.unmonitor_album(a["id"])
+                        unmonitored += 1
+                # Re-enable artist monitoring (so Lidarr tracks it) but albums stay off
+                if artist_data:
+                    artist_data["monitored"] = True
+                    lidarr._put(f"/artist/{lidarr_id}", artist_data)
+                # Clear pruned state so next scan re-evaluates
+                for a in albums:
+                    db.set_setting(f"pruned_{artist['id']}_{a.get('title', '')}", "")
+                changes.append(f"  ↳ Unmonitored all types ({unmonitored} album(s)), will re-scan with new profile")
+            except Exception as e:
+                changes.append(f"  ⚠️ Failed to unmonitor: {e}")
 
     if not changes:
         await ctx.send(f"No changes made to **{artist['name']}**.")
