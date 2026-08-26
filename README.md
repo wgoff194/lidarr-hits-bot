@@ -27,7 +27,18 @@ A Discord bot that tracks your favorite artists and only adds **popular** new re
 1. Open Lidarr → **Settings** → **General**
 2. Copy the **API Key**
 
-### 3. Configure
+### 3. (Optional) Get a Last.fm API Key
+
+Last.fm provides the best track popularity data — actual play counts with no 50-track limit. Highly recommended.
+
+1. Go to [Last.fm API](https://www.last.fm/api/account/create)
+2. Create an account (free)
+3. Create an API application
+4. Copy the **API Key**
+
+Without Last.fm, the bot falls back to Deezer's top 50 tracks (still works, but less data).
+
+### 4. Configure
 
 ```bash
 cp .env.example .env
@@ -35,7 +46,7 @@ cp .env.example .env
 nano .env
 ```
 
-### 4. Deploy with Portainer (Recommended)
+### 5. Deploy with Portainer (Recommended)
 
 #### Step 1: Push to GitHub
 
@@ -127,7 +138,7 @@ docker build -t lidarr-hits-bot .
 docker run -d --name lidarr-hits-bot --env-file .env -v bot-data:/data lidarr-hits-bot
 ```
 
-### 5. Lidarr URL Notes
+### 6. Lidarr URL Notes
 
 | Lidarr Location | LIDARR_URL |
 |---|---|
@@ -140,14 +151,21 @@ docker run -d --name lidarr-hits-bot --env-file .env -v bot-data:/data lidarr-hi
 | Command | Description |
 |---|---|
 | `?add <artist>` | Add artist — opens interactive setup dialog |
+| `?import` | Import existing Lidarr artists into watchlist |
+| `?update` / `?update <artist>` | Update artist settings (folder, mode, metadata) |
 | `?remove <artist>` | Stop tracking an artist |
 | `?list` | Show all tracked artists (with folder info) |
-| `?check` | Manually trigger a popularity check |
+| `?check` | Run popularity check (recent releases) |
+| `?scan` / `?scan <artist>` | Full catalog scan (pick artist or all) |
+| `?prune` / `?prune <artist>` | Prune downloaded albums |
+| `?dl` | Check pending downloads, auto-prune completed |
+| `?keep` | Mark tracks as never-prune (nested menu) |
 | `?threshold <0-100>` | View or set the popularity threshold |
 | `?mode <tracks\|album>` | Switch between tracks-only or whole-album mode |
 | `?folder` | Show all Lidarr root folders + current default |
 | `?folder <name>` | Set the default root folder |
 | `?folder set <artist> to <folder>` | Change an existing artist's folder |
+| `?menu` | Interactive menu with buttons for all commands |
 | `?help` | Show help |
 
 ## Adding Artists (Interactive Dialog)
@@ -190,9 +208,41 @@ The bot auto-discovers your Lidarr root folders — no need to type paths. Just 
 3. `LIDARR_ROOT_FOLDER` env var (fallback)
 4. First folder Lidarr returns (last resort)
 
-## Popularity Threshold
+## Popularity Scoring
 
-Deezer tracks are scored 0-100 for popularity based on the artist's top tracks. The bot uses this to decide what's worth downloading:
+The bot scores tracks 0-100 using two sources:
+
+| Source | Priority | Data | Limit |
+|---|---|---|---|
+| **Last.fm** | Primary | Actual play counts | No limit |
+| **Deezer** | Fallback | Track rank | Top 50 only |
+
+**Last.fm is strongly recommended** — it has play count data for millions of tracks with no cap. Without it, the bot only sees Deezer's top 50 tracks per artist, which can miss older hits.
+
+Both sources normalize to 0-100. Last.fm data always takes priority when available.
+
+## Never Prune (`?keep`)
+
+Some tracks should never be deleted, even if they score below threshold. Use `?keep` to protect them:
+
+```
+?keep
+  → Step 1: Pick artist (dropdown)
+  → Step 2: Pick album (dropdown from Lidarr)
+  → Step 3: Pick tracks (multi-select with checkboxes)
+     • 🔒 = already protected
+     • "Mark All Tracks" button = protect entire album
+     • "Confirm" button = save selection
+     • "Cancel" button = discard
+```
+
+**Example:** Protect all tracks on A Perfect Circle's "Thirteenth Step":
+1. `?keep` → pick A Perfect Circle
+2. Pick "Thirteenth Step"
+3. Click "📀 Mark All Tracks"
+4. Click "✅ Confirm"
+
+Now none of those tracks will ever be pruned, regardless of popularity score.
 
 | Threshold | What you get |
 |---|---|

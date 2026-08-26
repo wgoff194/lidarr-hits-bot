@@ -20,6 +20,9 @@ class Config:
     # Minimum popularity score (0-100) to consider a track "popular"
     POPULARITY_THRESHOLD: int = int(os.getenv("POPULARITY_THRESHOLD", "60"))
 
+    # Last.fm (free API key — best source for track popularity)
+    LASTFM_API_KEY: str = os.getenv("LASTFM_API_KEY", "")
+
     # Lidarr
     LIDARR_URL: str = os.getenv("LIDARR_URL", "http://localhost:8686")
     LIDARR_API_KEY: str = os.getenv("LIDARR_API_KEY", "")

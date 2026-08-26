@@ -432,29 +432,15 @@ def prune_single_album(artist_id: int, artist_name: str, album_name: str,
         return PruneResult(artist_name=artist_name, album_name=album_name, error="Artist not found")
 
     music_id = artist.get("spotify_id")
-    if not music_id:
-        return PruneResult(artist_name=artist_name, album_name=album_name, error="No Deezer ID")
 
-    try:
-        top_tracks = music.get_artist_top_tracks(music_id)
-    except Exception:
-        top_tracks = []
+    # Get unified popularity scores (Last.fm primary, Deezer fallback)
+    from popularity import get_artist_track_scores, score_track
+    scores = get_artist_track_scores(artist_name, deezer_id=music_id)
 
-    # Build name/id score maps
-    total_top = len(top_tracks)
-    name_scores: dict[str, int] = {}
-    id_scores: dict[int, int] = {}
-    ranks = [t.get("rank", 0) for t in top_tracks if t.get("rank", 0) > 0]
-    max_rank = max(ranks) if ranks else 1
-    for i, t in enumerate(top_tracks):
-        tname = t.get("title", "").strip().lower()
-        tid = t.get("id")
-        rank = t.get("rank", 0)
-        score = max(10, min(100, int((rank / max_rank) * 100))) if rank > 0 else max(50, 100 - int((i / total_top) * 50)) if total_top > 0 else 10
-        if tname:
-            name_scores[tname] = score
-        if tid:
-            id_scores[tid] = score
+    # Get never-prune tracks for this album
+    never_prune = db.get_never_prune_tracks(artist_id, album_name)
+    if never_prune:
+        log.info("Never-prune tracks for '%s': %s", album_name, never_prune)
 
     # Get downloaded tracks
     lidarr_tracks = lidarr.get_album_tracks(lidarr_album_id)
@@ -471,16 +457,17 @@ def prune_single_album(artist_id: int, artist_name: str, album_name: str,
     for track in downloaded:
         tname = track.get("title", "").strip().lower()
         tid = track.get("id")
-        score = id_scores.get(tid, 0) if tid else 0
-        if score == 0:
-            score = name_scores.get(tname, 0)
-        if score == 0:
-            for top_name, top_score in name_scores.items():
-                if top_name in tname or tname in top_name:
-                    score = top_score
-                    break
-        if score == 0:
-            score = 10
+
+        # Never-prune override
+        if tname in {np.lower() for np in never_prune}:
+            log.info("Track '%s': NEVER PRUNE (protected)", track.get("title"))
+            keep_tracks.append(track)
+            continue
+
+        score = score_track(tname, scores, deezer_id=tid)
+        log.info("Track '%s': score=%d, threshold=%d, → %s",
+                 track.get("title", "?"), score, Config.POPULARITY_THRESHOLD,
+                 "KEEP" if score >= Config.POPULARITY_THRESHOLD else "PRUNE")
         if score >= Config.POPULARITY_THRESHOLD:
             keep_tracks.append(track)
         else:

@@ -551,10 +551,12 @@ async def help_cmd(ctx: commands.Context):
             f"`{prefix}scan` — Full catalog scan (pick artist or all)\n"
             f"`{prefix}prune` — Delete below-threshold tracks from downloaded albums\n"
             f"`{prefix}check-downloads` — Check pending downloads, auto-prune completed\n"
+            f"`{prefix}keep` — Mark tracks as never-prune (nested menu)\n"
             f"`{prefix}threshold <0-100>` — View/set popularity threshold\n"
             f"`{prefix}mode <tracks|album>` — Download popular tracks only, or whole albums\n"
             f"`{prefix}folder` — Show/set root folders\n"
-            f"`{prefix}help` — This message"
+            f"`{prefix}help` — This message\n"
+            f"`{prefix}menu` — Interactive menu with buttons"
         ),
         inline=False,
     )
@@ -1461,6 +1463,7 @@ async def prune_cmd(ctx: commands.Context, *, artist_name: str = None):
 
 
 @bot.command(name="check-downloads")
+@bot.command(name="dl")
 async def check_downloads_cmd(ctx: commands.Context):
     """Check pending downloads and auto-prune completed ones."""
     await ctx.send("📥 Checking pending downloads...")
@@ -1689,6 +1692,488 @@ async def folder_cmd(ctx: commands.Context, *, folder_name: str = None):
     db.set_setting("default_root_folder", resolved)
     folder_display = resolved.rstrip("/").split("/")[-1]
     await ctx.send(f"📁 Default root folder set to **{folder_display}** (saved permanently).")
+
+
+# ── Menu UI ──────────────────────────────────────────────────────────────────
+
+
+class MenuInputModal(discord.ui.Modal, title="Enter Search Term"):
+    """Modal for entering a search term from the menu."""
+
+    search_input = discord.ui.TextInput(
+        label="Artist name (fuzzy OK)",
+        placeholder="e.g. 'link' for Linkin Park",
+        style=discord.TextStyle.short,
+        required=True,
+        max_length=100,
+    )
+
+    def __init__(self, command_name: str):
+        super().__init__()
+        self.command_name = command_name
+        self.value = None
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self.value = self.search_input.value.strip()
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title=f"🔍 Running: ?{self.command_name} {self.value}",
+                description="Processing...",
+                color=0x1DB954,
+            ),
+            view=None,
+        )
+        self.stop()
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await interaction.response.send_message(f"❌ Error: {error}", ephemeral=True)
+
+
+class MenuView(discord.ui.View):
+    """Main menu with buttons for each command."""
+
+    def __init__(self, author_id: int):
+        super().__init__(timeout=120)
+        self.author_id = author_id
+        self.selected_command = None
+        self.search_value = None
+
+    @discord.ui.button(label="➕ Add", style=discord.ButtonStyle.success, row=0)
+    async def add_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        modal = MenuInputModal("add")
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+        if modal.value:
+            self.selected_command = "add"
+            self.search_value = modal.value
+            self.stop()
+
+    @discord.ui.button(label="✏️ Update", style=discord.ButtonStyle.primary, row=0)
+    async def update_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        modal = MenuInputModal("update")
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+        if modal.value:
+            self.selected_command = "update"
+            self.search_value = modal.value
+            self.stop()
+
+    @discord.ui.button(label="🔍 Scan", style=discord.ButtonStyle.primary, row=0)
+    async def scan_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        modal = MenuInputModal("scan")
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+        if modal.value:
+            self.selected_command = "scan"
+            self.search_value = modal.value
+            self.stop()
+
+    @discord.ui.button(label="✂️ Prune", style=discord.ButtonStyle.primary, row=1)
+    async def prune_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        modal = MenuInputModal("prune")
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+        if modal.value:
+            self.selected_command = "prune"
+            self.search_value = modal.value
+            self.stop()
+
+    @discord.ui.button(label="📥 Import", style=discord.ButtonStyle.secondary, row=1)
+    async def import_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.selected_command = "import"
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="📥 DL Check", style=discord.ButtonStyle.secondary, row=1)
+    async def dl_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.selected_command = "dl"
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="📋 List", style=discord.ButtonStyle.secondary, row=2)
+    async def list_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.selected_command = "list"
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="📊 Check", style=discord.ButtonStyle.secondary, row=2)
+    async def check_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.selected_command = "check"
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=3)
+    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            embed=discord.Embed(title="❌ Menu closed", color=0xFF0000),
+            view=self,
+        )
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
+@bot.command(name="menu")
+async def menu_cmd(ctx: commands.Context):
+    """Show interactive menu with buttons for all commands."""
+    embed = discord.Embed(
+        title="🎵 Lidarr Hits Bot — Menu",
+        description="Click a button to run a command.\nCommands with arguments will prompt for input.",
+        color=0x1DB954,
+    )
+    embed.add_field(name="➕ Add", value="Add a new artist", inline=True)
+    embed.add_field(name="✏️ Update", value="Update artist settings", inline=True)
+    embed.add_field(name="🔍 Scan", value="Full catalog scan", inline=True)
+    embed.add_field(name="✂️ Prune", value="Prune downloaded albums", inline=True)
+    embed.add_field(name="📥 Import", value="Import from Lidarr", inline=True)
+    embed.add_field(name="📥 DL Check", value="Check pending downloads", inline=True)
+    embed.add_field(name="📋 List", value="Show watchlist", inline=True)
+    embed.add_field(name="📊 Check", value="Quick popularity check", inline=True)
+    embed.set_footer(text="Times out in 2 min")
+
+    view = MenuView(ctx.author.id)
+    await ctx.send(embed=embed, view=view)
+    await view.wait()
+
+    if not view.selected_command:
+        return
+
+    # Execute the selected command
+    if view.search_value:
+        # Command needs an argument — invoke with it
+        cmd = bot.get_command(view.selected_command)
+        if cmd:
+            await ctx.invoke(cmd, artist_name=view.search_value)
+    else:
+        # No argument needed — invoke directly
+        cmd = bot.get_command(view.selected_command)
+        if cmd:
+            await ctx.invoke(cmd)
+
+
+# ── Keep (Never Prune) UI ────────────────────────────────────────────────────
+
+
+class KeepArtistView(discord.ui.View):
+    """Step 1: Pick an artist for never-prune."""
+
+    def __init__(self, author_id: int, artists: list[dict]):
+        super().__init__(timeout=120)
+        self.author_id = author_id
+        self.artists = artists
+        self.selected_artist: Optional[dict] = None
+
+        options = []
+        for a in artists:
+            options.append(discord.SelectOption(label=a["name"], value=str(a["id"])))
+        self.artist_select.options = options[:25]
+
+    @discord.ui.select(placeholder="Pick an artist...", min_values=1, max_values=1, row=0)
+    async def artist_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        for a in self.artists:
+            if str(a["id"]) == select.values[0]:
+                self.selected_artist = a
+                break
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=1)
+    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            embed=discord.Embed(title="❌ Cancelled", color=0xFF0000), view=self)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
+class KeepAlbumView(discord.ui.View):
+    """Step 2: Pick an album (from Lidarr)."""
+
+    def __init__(self, author_id: int, albums: list[dict]):
+        super().__init__(timeout=120)
+        self.author_id = author_id
+        self.albums = albums
+        self.selected_album: Optional[dict] = None
+
+        options = []
+        for a in albums[:25]:
+            title = a.get("title", "Unknown")
+            options.append(discord.SelectOption(label=title, value=str(a["id"])))
+        self.album_select.options = options
+
+    @discord.ui.select(placeholder="Pick an album...", min_values=1, max_values=1, row=0)
+    async def album_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        for a in self.albums:
+            if str(a["id"]) == select.values[0]:
+                self.selected_album = a
+                break
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=1)
+    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            embed=discord.Embed(title="❌ Cancelled", color=0xFF0000), view=self)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
+class KeepTrackView(discord.ui.View):
+    """Step 3: Pick tracks to protect (multi-select)."""
+
+    def __init__(self, author_id: int, tracks: list[dict], already_protected: set[str]):
+        super().__init__(timeout=120)
+        self.author_id = author_id
+        self.tracks = tracks
+        self.already_protected = already_protected
+        self.selected_track_ids: list[str] = []
+        self.mark_all = False
+
+        options = []
+        for t in tracks[:25]:
+            title = t.get("title", "Unknown")
+            protected = "🔒" if title.lower() in {p.lower() for p in already_protected} else ""
+            options.append(discord.SelectOption(
+                label=f"{protected} {title}".strip(),
+                value=str(t["id"]),
+                default=title.lower() in {p.lower() for p in already_protected},
+            ))
+        self.track_select.options = options
+
+    @discord.ui.select(placeholder="Select tracks to protect (multi-select)...",
+                       min_values=0, max_values=25, row=0)
+    async def track_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.selected_track_ids = select.values
+        await interaction.response.defer()
+
+    @discord.ui.button(label="📀 Mark All Tracks", style=discord.ButtonStyle.primary, row=1)
+    async def mark_all_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.mark_all = True
+        self.selected_track_ids = [str(t["id"]) for t in self.tracks]
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="✅ All tracks marked as never-prune",
+                description=f"Protecting all {len(self.tracks)} track(s)",
+                color=0x1DB954,
+            ), view=self)
+
+    @discord.ui.button(label="✅ Confirm", style=discord.ButtonStyle.success, row=1)
+    async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        if not self.selected_track_ids:
+            await interaction.response.send_message("❌ Select at least one track.", ephemeral=True)
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        count = len(self.selected_track_ids)
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="✅ Tracks Protected",
+                description=f"{count} track(s) marked as never-prune",
+                color=0x1DB954,
+            ), view=self)
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=2)
+    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.selected_track_ids = []
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            embed=discord.Embed(title="❌ Cancelled", color=0xFF0000), view=self)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
+@bot.command(name="keep")
+async def keep_cmd(ctx: commands.Context):
+    """Mark tracks as never-prune. Nested menu: artist → album → tracks."""
+    artists = db.list_artists()
+    if not artists:
+        await ctx.send("📭 Watchlist is empty.")
+        return
+
+    # Step 1: Pick artist
+    artist_view = KeepArtistView(ctx.author.id, artists)
+    await ctx.send(embed=discord.Embed(
+        title="🔒 Never Prune — Step 1: Pick Artist",
+        description="Select an artist to protect tracks from pruning.",
+        color=0x1DB954,
+    ), view=artist_view)
+    await artist_view.wait()
+
+    if not artist_view.selected_artist:
+        return
+
+    artist = artist_view.selected_artist
+    lidarr_id = artist.get("lidarr_id")
+
+    if not lidarr_id:
+        await ctx.send(f"❌ **{artist['name']}** not in Lidarr yet.")
+        return
+
+    # Step 2: Pick album
+    try:
+        from lidarr_client import LidarrClient
+        lidarr = LidarrClient()
+        albums = lidarr.get_artist_albums(lidarr_id)
+    except Exception as e:
+        await ctx.send(f"❌ Lidarr error: {e}")
+        return
+
+    if not albums:
+        await ctx.send(f"❌ No albums found for **{artist['name']}** in Lidarr.")
+        return
+
+    album_view = KeepAlbumView(ctx.author.id, albums)
+    await ctx.send(embed=discord.Embed(
+        title=f"🔒 Never Prune — Step 2: Pick Album ({artist['name']})",
+        description="Select an album to protect tracks from.",
+        color=0x1DB954,
+    ), view=album_view)
+    await album_view.wait()
+
+    if not album_view.selected_album:
+        return
+
+    album = album_view.selected_album
+    album_name = album.get("title", "Unknown")
+
+    # Step 3: Pick tracks
+    try:
+        tracks = lidarr.get_album_tracks(album["id"])
+    except Exception:
+        tracks = []
+
+    if not tracks:
+        await ctx.send(f"❌ No tracks found for **{album_name}**.")
+        return
+
+    already_protected = db.get_never_prune_tracks(artist["id"], album_name)
+
+    track_view = KeepTrackView(ctx.author.id, tracks, already_protected)
+    await ctx.send(embed=discord.Embed(
+        title=f"🔒 Never Prune — Step 3: Pick Tracks ({album_name})",
+        description=(
+            f"Select tracks to protect from pruning.\n"
+            f"🔒 = already protected\n\n"
+            f"**Mark All** = keep entire album"
+        ),
+        color=0x1DB954,
+    ), view=track_view)
+    await track_view.wait()
+
+    if not track_view.selected_track_ids:
+        return
+
+    # Save to database
+    selected_names = []
+    for t in tracks:
+        if str(t["id"]) in track_view.selected_track_ids:
+            selected_names.append(t.get("title", "Unknown"))
+
+    if track_view.mark_all:
+        # Clear existing and add all
+        db.clear_album_never_prune(artist["id"], album_name)
+        db.add_album_never_prune(artist["id"], album_name, selected_names)
+    else:
+        # Add selected tracks
+        for name in selected_names:
+            db.add_never_prune(artist["id"], album_name, name)
+
+    # Confirmation
+    embed = discord.Embed(
+        title="🔒 Tracks Protected",
+        description=f"**{artist['name']}** — {album_name}",
+        color=0x1DB954,
+    )
+    embed.add_field(
+        name=f"Protected ({len(selected_names)})",
+        value="\n".join(f"• {n}" for n in selected_names[:20]),
+        inline=False,
+    )
+    await ctx.send(embed=embed)
 
 
 # ── Daily check scheduler ────────────────────────────────────────────────────

@@ -69,6 +69,15 @@ def init_db() -> None:
             updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
             UNIQUE(artist_id, album_name)
         );
+
+        CREATE TABLE IF NOT EXISTS never_prune (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            artist_id       INTEGER NOT NULL REFERENCES artists(id),
+            album_name      TEXT    NOT NULL,
+            track_name      TEXT    NOT NULL,
+            added_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(artist_id, album_name, track_name)
+        );
     """)
     conn.commit()
     conn.close()
@@ -316,3 +325,83 @@ def get_pending_albums() -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ── Never Prune ─────────────────────────────────────────────────────────────
+
+def add_never_prune(artist_id: int, album_name: str, track_name: str) -> None:
+    """Mark a track as never-prune."""
+    conn = _connect()
+    conn.execute(
+        "INSERT OR IGNORE INTO never_prune (artist_id, album_name, track_name) VALUES (?, ?, ?)",
+        (artist_id, album_name, track_name),
+    )
+    conn.commit()
+    conn.close()
+
+
+def remove_never_prune(artist_id: int, album_name: str, track_name: str) -> None:
+    """Remove a track from never-prune list."""
+    conn = _connect()
+    conn.execute(
+        "DELETE FROM never_prune WHERE artist_id = ? AND album_name = ? AND track_name = ?",
+        (artist_id, album_name, track_name),
+    )
+    conn.commit()
+    conn.close()
+
+
+def add_album_never_prune(artist_id: int, album_name: str, track_names: list[str]) -> None:
+    """Mark all tracks on an album as never-prune."""
+    conn = _connect()
+    for t in track_names:
+        conn.execute(
+            "INSERT OR IGNORE INTO never_prune (artist_id, album_name, track_name) VALUES (?, ?, ?)",
+            (artist_id, album_name, t),
+        )
+    conn.commit()
+    conn.close()
+
+
+def is_never_prune(artist_id: int, album_name: str, track_name: str) -> bool:
+    """Check if a track is marked as never-prune."""
+    conn = _connect()
+    row = conn.execute(
+        "SELECT 1 FROM never_prune WHERE artist_id = ? AND album_name = ? AND track_name = ?",
+        (artist_id, album_name, track_name),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def get_never_prune_tracks(artist_id: int, album_name: str) -> set[str]:
+    """Get all never-prune track names for an album."""
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT track_name FROM never_prune WHERE artist_id = ? AND album_name = ?",
+        (artist_id, album_name),
+    ).fetchall()
+    conn.close()
+    return {r["track_name"] for r in rows}
+
+
+def get_never_prune_albums(artist_id: int) -> list[str]:
+    """Get all album names that have never-prune tracks for an artist."""
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT DISTINCT album_name FROM never_prune WHERE artist_id = ?",
+        (artist_id,),
+    ).fetchall()
+    conn.close()
+    return [r["album_name"] for r in rows]
+
+
+def clear_album_never_prune(artist_id: int, album_name: str) -> None:
+    """Remove all never-prune entries for an album."""
+    conn = _connect()
+    conn.execute(
+        "DELETE FROM never_prune WHERE artist_id = ? AND album_name = ?",
+        (artist_id, album_name),
+    )
+    conn.commit()
+    conn.close()
