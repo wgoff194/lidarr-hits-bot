@@ -1462,8 +1462,7 @@ async def prune_cmd(ctx: commands.Context, *, artist_name: str = None):
     await ctx.send(report)
 
 
-@bot.command(name="check-downloads")
-@bot.command(name="dl")
+@bot.command(name="check-downloads", aliases=["dl"])
 async def check_downloads_cmd(ctx: commands.Context):
     """Check pending downloads and auto-prune completed ones."""
     await ctx.send("📥 Checking pending downloads...")
