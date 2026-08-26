@@ -227,14 +227,25 @@ class MusicClient:
         if not top_tracks:
             return []
 
-        # Build name-based AND id-based popularity maps
+        # Build name-based AND id-based popularity maps using Deezer rank
         total_top = len(top_tracks)
         name_scores: dict[str, int] = {}
         id_scores: dict[int, int] = {}
+
+        # Get the max rank to normalize to 0-100
+        ranks = [t.get("rank", 0) for t in top_tracks if t.get("rank", 0) > 0]
+        max_rank = max(ranks) if ranks else 1
+
         for i, t in enumerate(top_tracks):
             tname = t.get("title", "").strip().lower()
             tid = t.get("id")
-            score = max(50, 100 - int((i / total_top) * 50)) if total_top > 0 else 10
+            rank = t.get("rank", 0)
+            # Normalize rank to 0-100 scale
+            if rank > 0:
+                score = max(10, min(100, int((rank / max_rank) * 100)))
+            else:
+                # Fallback: position-based
+                score = max(50, 100 - int((i / total_top) * 50)) if total_top > 0 else 10
             if tname:
                 name_scores[tname] = score
             if tid:
