@@ -250,6 +250,7 @@ class MusicClient:
         while True:
             page = _get(f"/artist/{artist_id}/albums", params={"limit": 50, "offset": offset})
             items = page.get("data", [])
+            log.info("Deezer albums page at offset %d: %d items", offset, len(items))
             if not items:
                 break
 
@@ -331,6 +332,7 @@ class MusicClient:
 
         # Sort by number of popular tracks (most hits first)
         results.sort(key=lambda a: len(a.top_track_names), reverse=True)
+        log.info("Total albums with scores: %d", len(results))
         return results
 
 
