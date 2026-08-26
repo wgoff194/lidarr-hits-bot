@@ -35,21 +35,91 @@ cp .env.example .env
 nano .env
 ```
 
-### 4. Deploy with Docker (Portainer)
+### 4. Deploy with Portainer (Recommended)
 
-**Option A: Portainer Stack**
-1. In Portainer, go to **Stacks** → **Add Stack**
-2. Name it `lidarr-hits-bot`
-3. Upload the `docker-compose.yml` or paste its contents
-4. Add your `.env` variables in the **Environment variables** section
-5. Click **Deploy**
+#### Step 1: Push to GitHub
 
-**Option B: Docker Compose (terminal)**
+Create a new repo on GitHub and push the project:
+
 ```bash
-docker compose up -d
+cd lidarr-hits-bot
+git init
+git add .
+git commit -m "Initial commit"
+git remote add origin https://github.com/YOUR_USERNAME/lidarr-hits-bot.git
+git push -u origin main
 ```
 
-**Option C: Build and run manually**
+#### Step 2: Open Portainer
+
+1. Log into your Portainer web UI (usually `http://your-proxmox-ip:9000`)
+2. Select your **local** environment (the Docker host where Lidarr runs)
+
+#### Step 3: Create the Stack
+
+1. In the left sidebar, click **Stacks**
+2. Click **Add stack**
+3. Name it `lidarr-hits-bot`
+4. Under **Build method**, select **Repository**
+5. Fill in:
+   - **Repository URL:** `https://github.com/YOUR_USERNAME/lidarr-hits-bot.git`
+   - **Repository reference:** `refs/heads/main`
+   - **Compose path:** `docker-compose.yml`
+6. Scroll down to **Environment variables** and click **Add an environment variable** for each one:
+
+   | Variable | Value |
+   |---|---|
+   | `DISCORD_TOKEN` | Your Discord bot token |
+   | `LIDARR_URL` | `http://host.docker.internal:8686` |
+   | `LIDARR_API_KEY` | Your Lidarr API key |
+   | `LIDARR_QUALITY_PROFILE` | `Standard` |
+   | `POPULARITY_THRESHOLD` | `60` |
+   | `DOWNLOAD_MODE` | `tracks` |
+   | `DAILY_CHECK_CRON` | `0 9 * * *` |
+   | `TIMEZONE` | `America/Detroit` |
+   | `REPORT_CHANNEL_ID` | Your Discord channel ID (or `0`) |
+
+7. Click **Deploy the stack**
+
+#### Step 4: Verify It's Running
+
+1. Go to **Containers** in the left sidebar
+2. Find `lidarr-hits-bot` — status should be **running**
+3. Click the container name → **Logs** to see the bot startup
+4. You should see: `Bot online as <bot name> (ID: ...)`
+
+#### Step 5: Test in Discord
+
+1. Go to your Discord server
+2. Type `?help` — the bot should respond
+3. Type `?folder` — should show your Lidarr root folders
+4. Type `?add Linkin Park` — should open the interactive dialog
+
+#### Updating the Bot
+
+When you push changes to GitHub:
+1. Go to Portainer → **Stacks** → `lidarr-hits-bot`
+2. Click **Pull and redeploy**
+3. Portainer pulls the latest code and restarts the container
+
+Your SQLite database is stored in a Docker volume (`bot-data`) so it persists across redeployments.
+
+---
+
+### Alternative: Docker Compose (terminal)
+
+If you prefer the command line:
+
+```bash
+cd lidarr-hits-bot
+cp .env.example .env
+nano .env  # fill in your values
+docker compose up -d
+docker logs -f lidarr-hits-bot  # watch startup
+```
+
+### Alternative: Build and Run Manually
+
 ```bash
 docker build -t lidarr-hits-bot .
 docker run -d --name lidarr-hits-bot --env-file .env -v bot-data:/data lidarr-hits-bot
