@@ -171,14 +171,40 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
 
                 album_id = matched["id"]
 
+                # ── Check if popular tracks are already downloaded ───────
+                try:
+                    lidarr_tracks = lidarr.get_album_tracks(album_id)
+                    downloaded_tracks = {t.get("title", "").strip().lower() for t in lidarr_tracks if t.get("hasFile")}
+                except Exception:
+                    downloaded_tracks = set()
+
+                # Check which popular tracks are already downloaded
+                popular_names = {tp.name.strip().lower() for tp in album.track_popularities if tp.popularity >= Config.POPULARITY_THRESHOLD}
+                already_have = popular_names & downloaded_tracks
+                missing = popular_names - downloaded_tracks
+
+                if popular_names and not missing:
+                    # All popular tracks already downloaded
+                    db.set_album_status(artist["id"], album.name, "pruned", album_id)
+                    result.albums_skipped += 1
+                    result.skipped_albums.append(f"{album.name} (all {len(already_have)} hits already downloaded)")
+                    continue
+
                 # ── Album-level: monitor and search ─────────────────────
                 success = lidarr.monitor_and_search_album(album_id)
                 db.log_check(artist["id"], album.name, album.deezer_url, album.avg_popularity, success)
                 if success:
                     result.albums_added += 1
-                    result.added_albums.append(
-                        f"{album.name} (pop: {album.avg_popularity}, type: {album.album_type})"
-                    )
+                    status = "downloaded" if not missing else "pending"
+                    db.set_album_status(artist["id"], album.name, status, album_id)
+                    if missing:
+                        result.added_albums.append(
+                            f"{album.name} — {len(missing)} track(s) queued ({len(already_have)} already have)"
+                        )
+                    else:
+                        result.added_albums.append(
+                            f"{album.name} (pop: {album.avg_popularity}, type: {album.album_type})"
+                        )
                     # Record for prune tracking
                     db.record_monitored_tracks(artist["id"], album.name, [
                         {"name": tp.name, "popularity": tp.popularity}
@@ -379,6 +405,173 @@ def format_prune_results(results: list[PruneResult]) -> str:
             total_kept += r.kept_tracks
 
     lines.append(f"\n**Summary:** {total_kept} track(s) kept, {total_pruned} pruned")
+    return "\n".join(lines)
+
+
+# ── Album-specific prune ─────────────────────────────────────────────────────
+
+def prune_single_album(artist_id: int, artist_name: str, album_name: str,
+                       lidarr_album_id: int) -> PruneResult:
+    """Prune a specific album — delete below-threshold tracks and unmonitor."""
+    try:
+        music = MusicClient()
+    except ValueError:
+        return PruneResult(artist_name=artist_name, album_name=album_name, error="Music client init failed")
+    try:
+        lidarr = LidarrClient()
+    except ValueError:
+        return PruneResult(artist_name=artist_name, album_name=album_name, error="Lidarr client init failed")
+
+    # Get artist's Deezer ID for popularity lookup
+    artist = None
+    for a in db.list_artists():
+        if a["id"] == artist_id:
+            artist = a
+            break
+    if not artist:
+        return PruneResult(artist_name=artist_name, album_name=album_name, error="Artist not found")
+
+    music_id = artist.get("spotify_id")
+    if not music_id:
+        return PruneResult(artist_name=artist_name, album_name=album_name, error="No Deezer ID")
+
+    try:
+        top_tracks = music.get_artist_top_tracks(music_id)
+    except Exception:
+        top_tracks = []
+
+    # Build name/id score maps
+    total_top = len(top_tracks)
+    name_scores: dict[str, int] = {}
+    id_scores: dict[int, int] = {}
+    ranks = [t.get("rank", 0) for t in top_tracks if t.get("rank", 0) > 0]
+    max_rank = max(ranks) if ranks else 1
+    for i, t in enumerate(top_tracks):
+        tname = t.get("title", "").strip().lower()
+        tid = t.get("id")
+        rank = t.get("rank", 0)
+        score = max(10, min(100, int((rank / max_rank) * 100))) if rank > 0 else max(50, 100 - int((i / total_top) * 50)) if total_top > 0 else 10
+        if tname:
+            name_scores[tname] = score
+        if tid:
+            id_scores[tid] = score
+
+    # Get downloaded tracks
+    lidarr_tracks = lidarr.get_album_tracks(lidarr_album_id)
+    if not lidarr_tracks:
+        return PruneResult(artist_name=artist_name, album_name=album_name, error="No tracks found")
+
+    downloaded = [t for t in lidarr_tracks if t.get("hasFile")]
+    if not downloaded:
+        return PruneResult(artist_name=artist_name, album_name=album_name, error="No downloaded files")
+
+    # Score and split
+    keep_tracks: list[dict] = []
+    prune_tracks: list[dict] = []
+    for track in downloaded:
+        tname = track.get("title", "").strip().lower()
+        tid = track.get("id")
+        score = id_scores.get(tid, 0) if tid else 0
+        if score == 0:
+            score = name_scores.get(tname, 0)
+        if score == 0:
+            for top_name, top_score in name_scores.items():
+                if top_name in tname or tname in top_name:
+                    score = top_score
+                    break
+        if score == 0:
+            score = 10
+        if score >= Config.POPULARITY_THRESHOLD:
+            keep_tracks.append(track)
+        else:
+            prune_tracks.append(track)
+
+    if not prune_tracks:
+        db.set_album_status(artist_id, album_name, "pruned", lidarr_album_id)
+        return PruneResult(artist_name=artist_name, album_name=album_name,
+                           total_tracks=len(downloaded), kept_tracks=len(keep_tracks), pruned_tracks=0)
+
+    if not keep_tracks:
+        return PruneResult(artist_name=artist_name, album_name=album_name,
+                           total_tracks=len(downloaded), kept_tracks=0, pruned_tracks=0,
+                           error="All tracks below threshold — keeping album")
+
+    # Delete below-threshold tracks
+    deleted = 0
+    for track in prune_tracks:
+        track_file_id = track.get("trackFileId")
+        if track_file_id and lidarr.delete_track_file(track_file_id):
+            deleted += 1
+            log.info("Pruned '%s' from '%s' by %s", track.get("title"), album_name, artist_name)
+
+    # Unmonitor the album
+    lidarr.unmonitor_album(lidarr_album_id)
+
+    # Mark as pruned
+    db.set_album_status(artist_id, album_name, "pruned", lidarr_album_id)
+
+    return PruneResult(artist_name=artist_name, album_name=album_name,
+                       total_tracks=len(downloaded), kept_tracks=len(keep_tracks), pruned_tracks=deleted)
+
+
+# ── Download status checker ──────────────────────────────────────────────────
+
+def check_downloads() -> list[PruneResult]:
+    """
+    Check all pending albums in Lidarr. If downloaded, auto-prune.
+    Returns prune results for newly completed downloads.
+    """
+    pending = db.get_pending_albums()
+    if not pending:
+        return []
+
+    try:
+        lidarr = LidarrClient()
+    except ValueError:
+        return []
+
+    results: list[PruneResult] = []
+
+    for album in pending:
+        artist_id = album["artist_id"]
+        artist_name = album["artist_name"]
+        album_name = album["album_name"]
+        lidarr_album_id = album.get("lidarr_album_id")
+
+        if not lidarr_album_id:
+            continue
+
+        # Check if album has downloaded files
+        tracks = lidarr.get_album_tracks(lidarr_album_id)
+        downloaded = [t for t in tracks if t.get("hasFile")]
+
+        if not downloaded:
+            # Still downloading or not started
+            log.info("Album '%s' by %s: not downloaded yet (%d tracks, 0 files)",
+                     album_name, artist_name, len(tracks))
+            continue
+
+        # Album is downloaded — prune it
+        log.info("Album '%s' by %s: download complete (%d files), pruning...",
+                 album_name, artist_name, len(downloaded))
+        db.set_album_status(artist_id, album_name, "downloaded", lidarr_album_id)
+        result = prune_single_album(artist_id, artist_name, album_name, lidarr_album_id)
+        results.append(result)
+
+    return results
+
+
+def format_download_check_results(results: list[PruneResult]) -> str:
+    """Format download check results."""
+    if not results:
+        return "📥 No newly downloaded albums to prune."
+
+    lines = ["📥 **Download Check + Auto-Prune Complete**\n"]
+    for r in results:
+        if r.error:
+            lines.append(f"**{r.artist_name}** — {r.album_name}: {r.error}")
+        else:
+            lines.append(f"**{r.artist_name}** — {r.album_name}: kept {r.kept_tracks}, pruned {r.pruned_tracks}")
     return "\n".join(lines)
 
 

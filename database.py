@@ -59,6 +59,16 @@ def init_db() -> None:
             value           TEXT NOT NULL,
             updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS album_status (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            artist_id       INTEGER NOT NULL REFERENCES artists(id),
+            album_name      TEXT    NOT NULL,
+            lidarr_album_id INTEGER,
+            status          TEXT    NOT NULL DEFAULT 'pending',
+            updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(artist_id, album_name)
+        );
     """)
     conn.commit()
     conn.close()
@@ -253,3 +263,56 @@ def record_monitored_tracks(
         )
     conn.commit()
     conn.close()
+
+
+# ── Album Status ─────────────────────────────────────────────────────────────
+
+def set_album_status(artist_id: int, album_name: str, status: str,
+                     lidarr_album_id: int = None) -> None:
+    """Set or update album download status. Statuses: pending, downloaded, pruned, skipped."""
+    conn = _connect()
+    conn.execute(
+        """INSERT INTO album_status (artist_id, album_name, lidarr_album_id, status, updated_at)
+           VALUES (?, ?, ?, ?, datetime('now'))
+           ON CONFLICT(artist_id, album_name)
+           DO UPDATE SET status = excluded.status,
+                         lidarr_album_id = COALESCE(excluded.lidarr_album_id, album_status.lidarr_album_id),
+                         updated_at = excluded.updated_at""",
+        (artist_id, album_name, lidarr_album_id, status),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_album_status(artist_id: int, album_name: str) -> Optional[str]:
+    """Get album status. Returns None if not tracked."""
+    conn = _connect()
+    row = conn.execute(
+        "SELECT status FROM album_status WHERE artist_id = ? AND album_name = ?",
+        (artist_id, album_name),
+    ).fetchone()
+    conn.close()
+    return row["status"] if row else None
+
+
+def get_albums_by_status(status: str) -> list[dict]:
+    """Get all albums with a specific status."""
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT a.name as artist_name, als.* FROM album_status als "
+        "JOIN artists a ON a.id = als.artist_id WHERE als.status = ?",
+        (status,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_pending_albums() -> list[dict]:
+    """Get all albums waiting for download."""
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT a.name as artist_name, als.* FROM album_status als "
+        "JOIN artists a ON a.id = als.artist_id WHERE als.status IN ('pending', 'downloading')"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

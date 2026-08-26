@@ -22,7 +22,7 @@ from discord.ext import commands, tasks
 from croniter import croniter
 
 import database as db
-from checker import format_results, format_prune_results, run_daily_check, prune_downloaded_albums
+from checker import format_results, format_prune_results, format_download_check_results, run_daily_check, prune_downloaded_albums, check_downloads
 from config import Config
 from music_client import MusicClient
 
@@ -549,6 +549,7 @@ async def help_cmd(ctx: commands.Context):
             f"`{prefix}check` — Run popularity check (recent releases)\n"
             f"`{prefix}scan` — Full catalog scan (pick artist or all)\n"
             f"`{prefix}prune` — Delete below-threshold tracks from downloaded albums\n"
+            f"`{prefix}check-downloads` — Check pending downloads, auto-prune completed\n"
             f"`{prefix}threshold <0-100>` — View/set popularity threshold\n"
             f"`{prefix}mode <tracks|album>` — Download popular tracks only, or whole albums\n"
             f"`{prefix}folder` — Show/set root folders\n"
@@ -1434,6 +1435,16 @@ async def prune_cmd(ctx: commands.Context, *, artist_name: str = None):
     await ctx.send(report)
 
 
+@bot.command(name="check-downloads")
+async def check_downloads_cmd(ctx: commands.Context):
+    """Check pending downloads and auto-prune completed ones."""
+    await ctx.send("📥 Checking pending downloads...")
+    loop = asyncio.get_event_loop()
+    results = await loop.run_in_executor(None, check_downloads)
+    report = format_download_check_results(results)
+    await ctx.send(report)
+
+
 @bot.command(name="threshold")
 async def threshold_cmd(ctx: commands.Context, value: int = None):
     """Show or set the popularity threshold."""
@@ -1613,12 +1624,12 @@ async def daily_check_loop():
                 await channel.send(chunk)
                 report = report[len(chunk):]
 
-            # Auto-prune after daily check
-            log.info("Running auto-prune after daily check...")
-            prune_results = await loop.run_in_executor(None, prune_downloaded_albums)
-            prune_report = format_prune_results(prune_results)
-            if "Nothing to prune" not in prune_report:
-                await channel.send(prune_report)
+            # Check pending downloads and auto-prune completed ones
+            log.info("Checking pending downloads...")
+            dl_results = await loop.run_in_executor(None, check_downloads)
+            dl_report = format_download_check_results(dl_results)
+            if "No newly" not in dl_report:
+                await channel.send(dl_report)
         else:
             log.error("Report channel %s not found!", channel_id)
     else:
