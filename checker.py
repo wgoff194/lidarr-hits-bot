@@ -255,8 +255,14 @@ def prune_downloaded_albums(artist_filter: str = None, force: bool = False) -> l
         except Exception:
             top_tracks = []
 
-        top_track_ids = {t["id"] for t in top_tracks if t.get("id")}
-        top_track_ranks = {t["id"]: i for i, t in enumerate(top_tracks) if t.get("id")}
+        # Build a name-based popularity map (lowercase name → score)
+        total_top = len(top_tracks)
+        name_scores: dict[str, int] = {}
+        for i, t in enumerate(top_tracks):
+            tname = t.get("title", "").strip().lower()
+            if tname:
+                score = max(50, 100 - int((i / total_top) * 50)) if total_top > 0 else 10
+                name_scores[tname] = score
 
         for la in lidarr_albums:
             album_id = la["id"]
@@ -285,9 +291,17 @@ def prune_downloaded_albums(artist_filter: str = None, force: bool = False) -> l
             prune_tracks: list[dict] = []
 
             for track in downloaded_tracks:
-                score = music._calculate_track_score(
-                    track["id"], top_track_ids, top_track_ranks, len(top_tracks)
-                )
+                track_name = track.get("title", "").strip().lower()
+                # Look up by exact name, then fuzzy match
+                score = name_scores.get(track_name, 0)
+                if score == 0:
+                    # Fuzzy: check if any top track name is a substring
+                    for top_name, top_score in name_scores.items():
+                        if top_name in track_name or track_name in top_name:
+                            score = top_score
+                            break
+                if score == 0:
+                    score = 10  # Not in top tracks at all
 
                 if score >= Config.POPULARITY_THRESHOLD:
                     keep_tracks.append(track)
