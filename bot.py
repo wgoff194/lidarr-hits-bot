@@ -505,6 +505,13 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
     embed.set_footer(text=f"Added by {added_by}")
     await ctx.send(embed=embed)
 
+    # ── Auto-check this artist for popular tracks ────────────────────────
+    await ctx.send(f"🔍 Scanning **{display_name}** for popular tracks...")
+    loop = asyncio.get_event_loop()
+    results = await loop.run_in_executor(None, run_daily_check, display_name)
+    report = format_results(results)
+    await ctx.send(report)
+
 
 @bot.command(name="remove")
 async def remove_artist(ctx: commands.Context, *, artist_name: str):

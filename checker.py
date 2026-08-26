@@ -27,16 +27,24 @@ class CheckResult:
     skipped_albums: list[str] = field(default_factory=list)
 
 
-def run_daily_check() -> list[CheckResult]:
+def run_daily_check(artist_filter: str = None) -> list[CheckResult]:
     """
-    Check all watched artists for new popular releases.
+    Check watched artists for new popular releases.
+    If artist_filter is set, only check that one artist.
     Re-evaluates albums already in Lidarr to catch tracks that became popular.
     Returns a list of per-artist results.
     """
-    artists = db.list_artists()
-    if not artists:
-        log.info("No artists in watchlist, nothing to check.")
-        return []
+    if artist_filter:
+        artist = db.get_artist(artist_filter)
+        if not artist:
+            log.info("Artist '%s' not found in watchlist.", artist_filter)
+            return []
+        artists = [artist]
+    else:
+        artists = db.list_artists()
+        if not artists:
+            log.info("No artists in watchlist, nothing to check.")
+            return []
 
     log.info("Starting daily check for %d artists (mode: %s)...", len(artists), Config.DOWNLOAD_MODE)
 
