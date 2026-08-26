@@ -270,11 +270,15 @@ class MusicClient:
                 try:
                     tracks_resp = _get(f"/album/{aid}/tracks")
                     tracks = tracks_resp.get("data", [])
-                except Exception:
+                except Exception as e:
+                    log.warning("Failed to get tracks for album %s: %s", aid, e)
                     continue
 
                 if not tracks:
+                    log.info("Album '%s' (%s): no tracks returned, skipping", album.get("title", "?"), aid)
                     continue
+
+                log.info("Album '%s': %d tracks, type=%s", album.get("title", "?"), len(tracks), record_type)
 
                 # Score each track by name matching
                 popularities: list[int] = []
