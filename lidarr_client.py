@@ -61,17 +61,43 @@ class LidarrClient:
             return profiles[0]["id"]
         raise RuntimeError("No Lidarr quality profiles found")
 
-    # ── Root folders ─────────────────────────────────────────────────────────
+    # ── Metadata profiles ─────────────────────────────────────────────────────
+
+    def get_metadata_profiles(self) -> list[dict]:
+        """Get all metadata profiles from Lidarr. Returns list of {id, name}."""
+        return self._get("/metadataprofile")
 
     def get_metadata_profile_id(self) -> int:
-        """Get the first metadata profile ID (cached)."""
+        """Get the default metadata profile ID (cached)."""
         if self._metadata_profile_id is not None:
             return self._metadata_profile_id
-        profiles = self._get("/metadataprofile")
+        profiles = self.get_metadata_profiles()
         if profiles:
             self._metadata_profile_id = profiles[0]["id"]
             return profiles[0]["id"]
         raise RuntimeError("No Lidarr metadata profiles found")
+
+    def resolve_metadata_profile(self, folder_name: str) -> int:
+        """
+        Auto-select metadata profile based on root folder name.
+        Comedy folder → Comedy profile
+        Soundtracks folder → Soundtrack profile
+        Everything else → default (first profile)
+        """
+        folder_lower = folder_name.strip().lower()
+        profiles = self.get_metadata_profiles()
+
+        for p in profiles:
+            pname = p["name"].strip().lower()
+            if "comedy" in folder_lower or "comedy" in pname:
+                if "comedy" in pname:
+                    return p["id"]
+            elif "soundtrack" in folder_lower or "soundtrack" in pname:
+                if "soundtrack" in pname:
+                    return p["id"]
+
+        # Default: first profile
+        return profiles[0]["id"] if profiles else 1
 
     def get_root_folders(self) -> list[dict]:
         """
@@ -172,7 +198,8 @@ class LidarrClient:
 
     # ── Add artist ───────────────────────────────────────────────────────────
 
-    def add_artist(self, foreign_artist_id: str, root_folder: Optional[str] = None) -> Optional[dict]:
+    def add_artist(self, foreign_artist_id: str, root_folder: Optional[str] = None,
+                   metadata_profile_id: Optional[int] = None) -> Optional[dict]:
         """
         Add an artist to Lidarr by their MusicBrainz/foreign ID.
         root_folder: full path or friendly name (e.g. "Warren's Music").
@@ -198,7 +225,11 @@ class LidarrClient:
 
         # Build the add payload
         artist_data["qualityProfileId"] = self.get_quality_profile_id()
-        artist_data["metadataProfileId"] = self.get_metadata_profile_id()
+        if metadata_profile_id:
+            artist_data["metadataProfileId"] = metadata_profile_id
+        else:
+            folder_name = artist_data.get("rootFolderPath", "").rstrip("/").split("/")[-1]
+            artist_data["metadataProfileId"] = self.resolve_metadata_profile(folder_name)
         artist_data["rootFolderPath"] = self.get_root_folder(root_folder)
         artist_data["monitored"] = True
         artist_data["addOptions"] = {

@@ -111,9 +111,14 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
                         root_folder = artist.get("root_folder")
                         if not root_folder:
                             root_folder = db.get_setting("default_root_folder")
+                        # Determine metadata profile: per-artist setting > auto-resolve
+                        meta_profile_id = db.get_setting(f"meta_profile_{artist['name']}")
+                        if meta_profile_id:
+                            meta_profile_id = int(meta_profile_id)
                         added = lidarr.add_artist(
                             lidarr_artist.get("foreignArtistId", artist["name"]),
                             root_folder=root_folder,
+                            metadata_profile_id=meta_profile_id,
                         )
                         if added:
                             lidarr_artist_id = added["id"]
@@ -125,13 +130,21 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
 
             # ── Step 5: Find the album in Lidarr ─────────────────────────
             try:
-                # If artist was just added, wait for Lidarr to refresh albums
                 lidarr_albums = lidarr.get_artist_albums(lidarr_artist_id)
+                log.info("Found %d albums in Lidarr for artist ID %s", len(lidarr_albums), lidarr_artist_id)
+
+                # If no albums found, the stored lidarr_id might be stale — re-resolve
                 if not lidarr_albums:
-                    import time
-                    log.info("No albums yet for artist %s, waiting 10s for Lidarr refresh...", artist["name"])
-                    time.sleep(10)
-                    lidarr_albums = lidarr.get_artist_albums(lidarr_artist_id)
+                    log.warning("No albums for artist ID %s, re-resolving from Lidarr...", lidarr_artist_id)
+                    all_lidarr = lidarr.get_all_artists()
+                    for la in all_lidarr:
+                        if la.get("artistName", "").lower() == artist["name"].lower():
+                            lidarr_artist_id = la["id"]
+                            db.update_artist_lidarr_id(artist["name"], lidarr_artist_id)
+                            lidarr_albums = lidarr.get_artist_albums(lidarr_artist_id)
+                            log.info("Re-resolved to artist ID %s, found %d albums", lidarr_artist_id, len(lidarr_albums))
+                            break
+
                 matched = _match_album(album.name, lidarr_albums)
 
                 if not matched:

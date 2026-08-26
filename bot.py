@@ -132,6 +132,8 @@ class AddArtistView(discord.ui.View):
         music_id: Optional[str],
         artist_data: Optional[dict],
         folders: list[dict],
+        metadata_profiles: list[dict],
+        lidarr_client,  # LidarrClient instance for auto-resolving profiles
     ):
         super().__init__(timeout=300)  # 5 minute timeout
         self.author_id = author_id
@@ -139,15 +141,19 @@ class AddArtistView(discord.ui.View):
         self.music_id = music_id
         self.artist_data = artist_data
         self.folders = folders
+        self.metadata_profiles = metadata_profiles
+        self.lidarr = lidarr_client
         self.threshold = Config.POPULARITY_THRESHOLD
         self.selected_mode = Config.DOWNLOAD_MODE
         self.selected_folder: Optional[str] = None  # None = use default
+        self.selected_metadata_profile: Optional[int] = None
         self.confirmed = False
         self.cancelled = False
 
         # Populate the folder dropdown
         self._setup_folder_select()
         self._setup_mode_select()
+        self._setup_metadata_profile_select()
 
     def _setup_folder_select(self):
         """Populate the folder dropdown from Lidarr data."""
@@ -185,6 +191,57 @@ class AddArtistView(discord.ui.View):
         for opt in self.mode_select.options:
             opt.default = opt.value == self.selected_mode
 
+    def _get_folder_name(self) -> str:
+        """Get the friendly name of the selected folder."""
+        if not self.selected_folder:
+            return ""
+        for f in self.folders:
+            if f["path"] == self.selected_folder:
+                return f["name"]
+        return self.selected_folder.rstrip("/").split("/")[-1]
+
+    def _get_filtered_profiles(self) -> list[dict]:
+        """Get metadata profiles filtered by folder type."""
+        folder_name = self._get_folder_name().lower()
+        profiles = self.metadata_profiles
+
+        if "comedy" in folder_name:
+            return [p for p in profiles if "comedy" in p["name"].lower()]
+        elif "soundtrack" in folder_name:
+            return [p for p in profiles if "soundtrack" in p["name"].lower()]
+        else:
+            # All profiles except Comedy and Soundtrack
+            return [p for p in profiles
+                    if "comedy" not in p["name"].lower()
+                    and "soundtrack" not in p["name"].lower()]
+
+    def _setup_metadata_profile_select(self):
+        """Populate the metadata profile dropdown based on current folder."""
+        filtered = self._get_filtered_profiles()
+        options = []
+        for p in filtered:
+            options.append(discord.SelectOption(
+                label=p["name"],
+                value=str(p["id"]),
+            ))
+
+        if not options:
+            self.metadata_profile_select.disabled = True
+            self.metadata_profile_select.placeholder = "No profiles"
+        else:
+            # Auto-select based on folder
+            if self.selected_folder and self.lidarr:
+                folder_name = self._get_folder_name()
+                auto_id = self.lidarr.resolve_metadata_profile(folder_name)
+                self.selected_metadata_profile = auto_id
+                for opt in options:
+                    opt.default = opt.value == str(auto_id)
+            elif not self.selected_metadata_profile:
+                self.selected_metadata_profile = int(options[0].value)
+                options[0].default = True
+
+        self.metadata_profile_select.options = options[:25]
+
     # ── Folder dropdown ──────────────────────────────────────────────────
 
     @discord.ui.select(
@@ -200,6 +257,8 @@ class AddArtistView(discord.ui.View):
         # Update defaults
         for opt in select.options:
             opt.default = opt.value == self.selected_folder
+        # Refresh metadata profiles based on new folder
+        self._setup_metadata_profile_select()
         await interaction.response.edit_message(
             embed=self.build_embed(), view=self
         )
@@ -232,6 +291,24 @@ class AddArtistView(discord.ui.View):
         self.selected_mode = select.values[0]
         for opt in select.options:
             opt.default = opt.value == self.selected_mode
+        await interaction.response.edit_message(
+            embed=self.build_embed(), view=self
+        )
+
+    # ── Metadata profile dropdown ────────────────────────────────────────
+
+    @discord.ui.select(
+        placeholder="📀 Metadata profile...",
+        min_values=1,
+        max_values=1,
+        row=2,
+    )
+    async def metadata_profile_select(
+        self, interaction: discord.Interaction, select: discord.ui.Select
+    ):
+        self.selected_metadata_profile = int(select.values[0])
+        for opt in select.options:
+            opt.default = opt.value == select.values[0]
         await interaction.response.edit_message(
             embed=self.build_embed(), view=self
         )
@@ -364,6 +441,15 @@ class AddArtistView(discord.ui.View):
         embed.add_field(name="🎛️ Mode", value=mode_display, inline=True)
         embed.add_field(name="📊 Threshold", value=f"{self.threshold}/100", inline=True)
 
+        # Metadata profile
+        meta_display = "auto"
+        if self.selected_metadata_profile and self.metadata_profiles:
+            for p in self.metadata_profiles:
+                if p["id"] == self.selected_metadata_profile:
+                    meta_display = p["name"]
+                    break
+        embed.add_field(name="📀 Metadata", value=meta_display, inline=True)
+
         if not confirmed:
             embed.set_footer(text="Use the dropdowns and buttons to configure • Times out in 5 min")
 
@@ -442,14 +528,17 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
         await ctx.send(f"⚠️ **{display_name}** is already in the watchlist.")
         return
 
-    # Fetch Lidarr root folders
+    # Fetch Lidarr root folders and metadata profiles
     folders = []
+    metadata_profiles = []
+    lidarr = None
     try:
         from lidarr_client import LidarrClient
         lidarr = LidarrClient()
         folders = lidarr.get_root_folders()
+        metadata_profiles = lidarr.get_metadata_profiles()
     except Exception as e:
-        log.warning("Could not fetch Lidarr folders: %s", e)
+        log.warning("Could not fetch Lidarr data: %s", e)
 
     # Launch the interactive view
     view = AddArtistView(
@@ -458,6 +547,8 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
         music_id=music_id,
         artist_data=artist_data,
         folders=folders,
+        metadata_profiles=metadata_profiles,
+        lidarr_client=lidarr,
     )
 
     await ctx.send(embed=view.build_embed(), view=view)
@@ -488,10 +579,21 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
         Config.DOWNLOAD_MODE = view.selected_mode
         db.set_setting("download_mode", view.selected_mode)
 
+    # Store metadata profile for this artist
+    if view.selected_metadata_profile:
+        db.set_setting(f"meta_profile_{display_name}", str(view.selected_metadata_profile))
+
     # Confirmation message
     folder_display = "(default)"
     if view.selected_folder:
         folder_display = view.selected_folder.rstrip("/").split("/")[-1]
+
+    meta_display = "auto"
+    if view.selected_metadata_profile and metadata_profiles:
+        for p in metadata_profiles:
+            if p["id"] == view.selected_metadata_profile:
+                meta_display = p["name"]
+                break
 
     embed = discord.Embed(
         title="✅ Artist Added",
@@ -499,7 +601,8 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
             f"**{display_name}** is now being tracked.\n\n"
             f"📁 **Folder:** {folder_display}\n"
             f"🎛️ **Mode:** {view.selected_mode}\n"
-            f"📊 **Threshold:** {view.threshold}/100"
+            f"📊 **Threshold:** {view.threshold}/100\n"
+            f"📀 **Metadata:** {meta_display}"
         ),
         color=0x1DB954,
     )
