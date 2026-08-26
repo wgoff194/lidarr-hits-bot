@@ -202,16 +202,25 @@ class PruneResult:
     error: str = ""
 
 
-def prune_downloaded_albums() -> list[PruneResult]:
+def prune_downloaded_albums(artist_filter: str = None, force: bool = False) -> list[PruneResult]:
     """
-    Check all artists for downloaded albums. For each:
+    Check artists for downloaded albums. For each:
     1. Find tracks above the popularity threshold
     2. Delete below-threshold track files from disk
     3. Unmonitor the album so Lidarr doesn't re-download
+
+    If artist_filter is set, only check that artist.
+    If force is True, re-check even already-pruned albums.
     """
-    artists = db.list_artists()
-    if not artists:
-        return []
+    if artist_filter:
+        artist = db.get_artist(artist_filter)
+        if not artist:
+            return []
+        artists = [artist]
+    else:
+        artists = db.list_artists()
+        if not artists:
+            return []
 
     try:
         music = MusicClient()
@@ -253,9 +262,9 @@ def prune_downloaded_albums() -> list[PruneResult]:
             album_id = la["id"]
             album_name = la.get("title", "Unknown")
 
-            # Check if already pruned
+            # Check if already pruned (skip unless force)
             pruned_key = f"pruned_{artist['id']}_{album_name}"
-            if db.get_setting(pruned_key):
+            if not force and db.get_setting(pruned_key):
                 continue
 
             # Get downloaded track files

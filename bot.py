@@ -851,12 +851,135 @@ async def scan_cmd(ctx: commands.Context):
         report = report[len(chunk):]
 
 
+class PruneArtistView(discord.ui.View):
+    """Dropdown to pick an artist (or all) for pruning."""
+
+    def __init__(self, author_id: int, artists: list[dict]):
+        super().__init__(timeout=120)
+        self.author_id = author_id
+        self.artists = artists
+        self.selected: Optional[str] = None
+        self.confirmed = False
+
+        options = []
+        for a in artists:
+            options.append(discord.SelectOption(label=a["name"], value=a["name"]))
+        self.artist_select.options = options[:25]
+
+    @discord.ui.select(placeholder="Pick an artist to prune...", min_values=1, max_values=1, row=0)
+    async def artist_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.selected = select.values[0]
+        for opt in select.options:
+            opt.default = opt.value == self.selected
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="✂️ Prune Artist", style=discord.ButtonStyle.success, row=1)
+    async def go_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        if not self.selected:
+            await interaction.response.send_message("❌ Pick an artist first.", ephemeral=True)
+            return
+        self.confirmed = True
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title=f"✂️ Pruning: {self.selected}",
+                description="Checking downloaded albums...",
+                color=0x1DB954,
+            ),
+            view=self,
+        )
+
+    @discord.ui.button(label="📀 All Artists", style=discord.ButtonStyle.danger, row=1)
+    async def all_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.selected = "__all__"
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary, row=1)
+    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(
+            embed=discord.Embed(title="❌ Cancelled", color=0xFF0000),
+            view=self,
+        )
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
 @bot.command(name="prune")
 async def prune_cmd(ctx: commands.Context):
-    """Prune downloaded albums — delete below-threshold tracks and unmonitor."""
-    await ctx.send("✂️ Checking for downloaded albums to prune...")
-    loop = asyncio.get_event_loop()
-    results = await loop.run_in_executor(None, prune_downloaded_albums)
+    """Prune downloaded albums — pick an artist or prune all."""
+    artists = db.list_artists()
+    if not artists:
+        await ctx.send("📭 Watchlist is empty. Add an artist with `?add <name>` first.")
+        return
+
+    view = PruneArtistView(ctx.author.id, artists)
+    embed = discord.Embed(
+        title="✂️ Prune Downloaded Albums",
+        description=(
+            f"Pick an artist to prune their downloaded albums.\n"
+            f"Deletes below-threshold tracks and unmonitors albums.\n\n"
+            f"Currently tracking **{len(artists)}** artist(s)."
+        ),
+        color=0x1DB954,
+    )
+    embed.set_footer(text="Select an artist from the dropdown • Times out in 2 min")
+    await ctx.send(embed=embed, view=view)
+    await view.wait()
+
+    if not view.selected:
+        return
+
+    if view.selected == "__all__":
+        # Confirmation warning
+        confirm_view = ScanConfirmView(ctx.author.id)
+        confirm_embed = discord.Embed(
+            title="⚠️ Prune ALL Artists?",
+            description=(
+                f"You're about to prune **{len(artists)} artists**' downloaded albums.\n\n"
+                "This deletes below-threshold tracks from disk and unmonitors albums.\n"
+                "**This cannot be undone.**\n\n"
+                "Are you sure?"
+            ),
+            color=0xFFA500,
+        )
+        await ctx.send(embed=confirm_embed, view=confirm_view)
+        await confirm_view.wait()
+
+        if not confirm_view.confirmed:
+            return
+
+        await ctx.send(f"✂️ Pruning **{len(artists)} artists**... this may take a while.")
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(None, prune_downloaded_albums, None, True)
+    else:
+        if not view.confirmed:
+            return
+        await ctx.send(f"✂️ Pruning **{view.selected}**'s downloaded albums...")
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(None, prune_downloaded_albums, view.selected, True)
+
     report = format_prune_results(results)
     await ctx.send(report)
 
