@@ -223,17 +223,24 @@ class MusicClient:
         Gets albums from Deezer, filters out singles, and scores by top track overlap.
         """
         top_tracks = self.get_artist_top_tracks(artist_id)
+        log.info("Found %d top tracks for artist %s", len(top_tracks), artist_id)
         if not top_tracks:
             return []
 
-        # Build name-based popularity map
+        # Build name-based AND id-based popularity maps
         total_top = len(top_tracks)
         name_scores: dict[str, int] = {}
+        id_scores: dict[int, int] = {}
         for i, t in enumerate(top_tracks):
             tname = t.get("title", "").strip().lower()
+            tid = t.get("id")
+            score = max(50, 100 - int((i / total_top) * 50)) if total_top > 0 else 10
             if tname:
-                score = max(50, 100 - int((i / total_top) * 50)) if total_top > 0 else 10
                 name_scores[tname] = score
+            if tid:
+                id_scores[tid] = score
+
+        log.info("Top track names: %s", list(name_scores.keys())[:10])
 
         # Get all albums from Deezer, filter out singles (1-track albums)
         albums_seen: set[str] = set()
@@ -276,10 +283,14 @@ class MusicClient:
                 for track in tracks:
                     tname = track.get("title", "Unknown")
                     tname_lower = tname.strip().lower()
+                    tid = track.get("id")
 
-                    # Exact match
-                    score = name_scores.get(tname_lower, 0)
-                    # Fuzzy match
+                    # Try ID match first (exact)
+                    score = id_scores.get(tid, 0) if tid else 0
+                    # Try name match (exact)
+                    if score == 0:
+                        score = name_scores.get(tname_lower, 0)
+                    # Try name match (fuzzy)
                     if score == 0:
                         for top_name, top_score in name_scores.items():
                             if top_name in tname_lower or tname_lower in top_name:
@@ -294,6 +305,8 @@ class MusicClient:
                         top_names.append(tname)
 
                 avg_pop = sum(popularities) / len(popularities) if popularities else 0
+                log.info("Album '%s': %d tracks, %d popular, avg pop %.1f",
+                         album.get("title", "?"), len(tracks), len(top_names), avg_pop)
 
                 # Parse release date
                 rd = album.get("release_date", "")
