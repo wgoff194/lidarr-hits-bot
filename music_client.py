@@ -213,86 +213,102 @@ class MusicClient:
 
     def get_artist_top_albums(self, artist_id: str) -> list[AlbumInfo]:
         """
-        Full-catalog scan: find albums containing the artist's top tracks.
-        Used for older bands with no recent releases — grabs the hits from
-        their entire career.
+        Full-catalog scan: score the artist's ALBUMS based on Deezer top tracks.
+        Gets albums from Deezer, filters out singles, and scores by top track overlap.
         """
         top_tracks = self.get_artist_top_tracks(artist_id)
         if not top_tracks:
             return []
 
-        # Build popularity ranking
-        top_track_ids: set[int] = set()
-        top_track_ranks: dict[int, int] = {}
+        # Build name-based popularity map
+        total_top = len(top_tracks)
+        name_scores: dict[str, int] = {}
         for i, t in enumerate(top_tracks):
-            tid = t.get("id")
-            if tid:
-                top_track_ids.add(tid)
-                top_track_ranks[tid] = i
+            tname = t.get("title", "").strip().lower()
+            if tname:
+                score = max(50, 100 - int((i / total_top) * 50)) if total_top > 0 else 10
+                name_scores[tname] = score
 
-        # Group top tracks by album
-        album_tracks: dict[str, dict] = {}  # album_id -> {info, tracks[]}
-        for track in top_tracks:
-            album_data = track.get("album", {})
-            aid = str(album_data.get("id", ""))
-            if not aid:
-                continue
-            if aid not in album_tracks:
-                album_tracks[aid] = {
-                    "info": album_data,
-                    "tracks": [],
-                }
-            album_tracks[aid]["tracks"].append(track)
-
-        # Build AlbumInfo for each album that has top tracks
+        # Get all albums from Deezer, filter out singles (1-track albums)
+        albums_seen: set[str] = set()
         results: list[AlbumInfo] = []
-        for aid, data in album_tracks.items():
-            album_info = data["info"]
-            tracks_in_album = data["tracks"]
+        offset = 0
 
-            # Get full album track list to show all tracks
-            try:
-                full_tracks_resp = _get(f"/album/{aid}/tracks")
-                all_tracks = full_tracks_resp.get("data", [])
-            except Exception:
-                all_tracks = tracks_in_album
+        while True:
+            page = _get(f"/artist/{artist_id}/albums", params={"limit": 50, "offset": offset})
+            items = page.get("data", [])
+            if not items:
+                break
 
-            # Score all tracks
-            popularities: list[int] = []
-            top_names: list[str] = []
-            track_pops: list[TrackPopularity] = []
+            for album in items:
+                aid = str(album["id"])
+                if aid in albums_seen:
+                    continue
+                albums_seen.add(aid)
 
-            for track in all_tracks:
-                tid = track.get("id")
-                tname = track.get("title", "Unknown")
-                score = self._calculate_track_score(tid, top_track_ids, top_track_ranks, len(top_tracks))
-                popularities.append(score)
-                track_pops.append(TrackPopularity(name=tname, popularity=score))
-                if score >= Config.POPULARITY_THRESHOLD:
-                    top_names.append(tname)
+                # Skip compilations with very few tracks (likely noise)
+                nb_tracks = album.get("nb_tracks", 0)
+                record_type = album.get("record_type", "album")
+                if nb_tracks < 1:
+                    continue
 
-            avg_pop = sum(popularities) / len(popularities) if popularities else 0
+                # Get album tracks
+                try:
+                    tracks_resp = _get(f"/album/{aid}/tracks")
+                    tracks = tracks_resp.get("data", [])
+                except Exception:
+                    continue
 
-            # Parse release date
-            rd = album_info.get("release_date", "")
-            if not rd:
-                rd = "0000-00-00"
+                if not tracks:
+                    continue
 
-            record_type = album_info.get("record_type", "album")
-            if record_type not in ("album", "single", "ep"):
-                record_type = "album"
+                # Score each track by name matching
+                popularities: list[int] = []
+                top_names: list[str] = []
+                track_pops: list[TrackPopularity] = []
 
-            results.append(AlbumInfo(
-                name=album_info.get("title", "Unknown"),
-                deezer_id=aid,
-                deezer_url=album_info.get("link", ""),
-                release_date=rd,
-                album_type=record_type,
-                total_tracks=len(all_tracks),
-                avg_popularity=round(avg_pop, 1),
-                top_track_names=top_names[:5],
-                track_popularities=track_pops,
-            ))
+                for track in tracks:
+                    tname = track.get("title", "Unknown")
+                    tname_lower = tname.strip().lower()
+
+                    # Exact match
+                    score = name_scores.get(tname_lower, 0)
+                    # Fuzzy match
+                    if score == 0:
+                        for top_name, top_score in name_scores.items():
+                            if top_name in tname_lower or tname_lower in top_name:
+                                score = top_score
+                                break
+                    if score == 0:
+                        score = 10
+
+                    popularities.append(score)
+                    track_pops.append(TrackPopularity(name=tname, popularity=score))
+                    if score >= Config.POPULARITY_THRESHOLD:
+                        top_names.append(tname)
+
+                avg_pop = sum(popularities) / len(popularities) if popularities else 0
+
+                # Parse release date
+                rd = album.get("release_date", "")
+                if not rd:
+                    rd = "0000-00-00"
+
+                results.append(AlbumInfo(
+                    name=album.get("title", "Unknown"),
+                    deezer_id=aid,
+                    deezer_url=album.get("link", ""),
+                    release_date=rd,
+                    album_type=record_type,
+                    total_tracks=len(tracks),
+                    avg_popularity=round(avg_pop, 1),
+                    top_track_names=top_names[:5],
+                    track_popularities=track_pops,
+                ))
+
+            if not page.get("next"):
+                break
+            offset += 50
 
         # Sort by number of popular tracks (most hits first)
         results.sort(key=lambda a: len(a.top_track_names), reverse=True)

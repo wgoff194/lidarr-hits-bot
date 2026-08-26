@@ -235,6 +235,11 @@ def prune_downloaded_albums(artist_filter: str = None, force: bool = False) -> l
     results: list[PruneResult] = []
 
     for artist in artists:
+        # Only prune artists set to "tracks" mode
+        artist_mode = db.get_setting(f"mode_{artist['name']}") or Config.DOWNLOAD_MODE
+        if artist_mode != "tracks":
+            continue
+
         lidarr_artist_id = artist.get("lidarr_id")
         if not lidarr_artist_id:
             continue

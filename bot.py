@@ -152,6 +152,7 @@ class AddArtistView(discord.ui.View):
 
         # Populate the folder dropdown
         self._setup_folder_select()
+        self._setup_mode_select()
         self._setup_metadata_profile_select()
 
     def _setup_folder_select(self):
@@ -262,13 +263,45 @@ class AddArtistView(discord.ui.View):
             embed=self.build_embed(), view=self
         )
 
+    # ── Mode dropdown ────────────────────────────────────────────────────
+
+    @discord.ui.select(
+        placeholder="🎛️ Download mode...",
+        options=[
+            discord.SelectOption(
+                label="Tracks (prune below threshold)",
+                value="tracks",
+                description="Download album, delete below-threshold tracks",
+                emoji="🎵",
+            ),
+            discord.SelectOption(
+                label="Album (keep everything)",
+                value="album",
+                description="Download full album, keep all tracks",
+                emoji="💿",
+            ),
+        ],
+        min_values=1,
+        max_values=1,
+        row=1,
+    )
+    async def mode_select(
+        self, interaction: discord.Interaction, select: discord.ui.Select
+    ):
+        self.selected_mode = select.values[0]
+        for opt in select.options:
+            opt.default = opt.value == self.selected_mode
+        await interaction.response.edit_message(
+            embed=self.build_embed(), view=self
+        )
+
     # ── Metadata profile dropdown ────────────────────────────────────────
 
     @discord.ui.select(
         placeholder="📀 Metadata profile...",
         min_values=1,
         max_values=1,
-        row=1,
+        row=2,
     )
     async def metadata_profile_select(
         self, interaction: discord.Interaction, select: discord.ui.Select
@@ -402,9 +435,9 @@ class AddArtistView(discord.ui.View):
         if self.selected_folder:
             folder_display = self.selected_folder.rstrip("/").split("/")[-1]
 
-        mode_display = "🎵 Tracks Only" if self.selected_mode == "tracks" else "💿 Full Album"
-
         embed.add_field(name="📁 Root Folder", value=folder_display, inline=True)
+        mode_display = "🎵 Tracks (prune)" if self.selected_mode == "tracks" else "💿 Album (keep all)"
+        embed.add_field(name="🎛️ Mode", value=mode_display, inline=True)
         embed.add_field(name="📊 Threshold", value=f"{self.threshold}/100", inline=True)
 
         # Metadata profile
@@ -437,6 +470,7 @@ async def help_cmd(ctx: commands.Context):
         name="Commands",
         value=(
             f"`{prefix}add <artist>` — Add artist (interactive setup dialog)\n"
+            f"`{prefix}update` — Update artist settings (folder, mode, metadata)\n"
             f"`{prefix}remove <artist>` — Stop tracking\n"
             f"`{prefix}list` — Show watchlist\n"
             f"`{prefix}check` — Run popularity check (recent releases)\n"
@@ -546,9 +580,10 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
         Config.DOWNLOAD_MODE = view.selected_mode
         db.set_setting("download_mode", view.selected_mode)
 
-    # Store metadata profile for this artist
+    # Store metadata profile and mode for this artist
     if view.selected_metadata_profile:
         db.set_setting(f"meta_profile_{display_name}", str(view.selected_metadata_profile))
+    db.set_setting(f"mode_{display_name}", view.selected_mode)
 
     # Confirmation message
     folder_display = "(default)"
@@ -567,6 +602,7 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
         description=(
             f"**{display_name}** is now being tracked.\n\n"
             f"📁 **Folder:** {folder_display}\n"
+            f"🎛️ **Mode:** {view.selected_mode}\n"
             f"📊 **Threshold:** {view.threshold}/100\n"
             f"📀 **Metadata:** {meta_display}"
         ),
@@ -591,6 +627,163 @@ async def remove_artist(ctx: commands.Context, *, artist_name: str):
         await ctx.send(f"🗑️ **{artist_name.strip()}** removed from the watchlist.")
     else:
         await ctx.send(f"❌ **{artist_name.strip()}** not found in the watchlist.")
+
+
+# ── Update Artist UI ─────────────────────────────────────────────────────────
+
+
+class UpdatePickerView(discord.ui.View):
+    """Dropdown to pick an artist to update."""
+
+    def __init__(self, author_id: int, artists: list[dict]):
+        super().__init__(timeout=120)
+        self.author_id = author_id
+        self.selected: Optional[str] = None
+
+        options = []
+        for a in artists:
+            options.append(discord.SelectOption(label=a["name"], value=a["name"]))
+        self.artist_select.options = options[:25]
+
+    @discord.ui.select(placeholder="Pick an artist to update...", min_values=1, max_values=1, row=0)
+    async def artist_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        self.selected = select.values[0]
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
+@bot.command(name="update")
+async def update_cmd(ctx: commands.Context):
+    """Update an artist's settings — folder, mode, threshold, metadata profile."""
+    artists = db.list_artists()
+    if not artists:
+        await ctx.send("📭 Watchlist is empty.")
+        return
+
+    # Step 1: Pick artist
+    picker = UpdatePickerView(ctx.author.id, artists)
+    await ctx.send(embed=discord.Embed(
+        title="✏️ Update Artist",
+        description="Pick an artist to update their settings.",
+        color=0x1DB954,
+    ), view=picker)
+    await picker.wait()
+
+    if not picker.selected:
+        return
+
+    artist = db.get_artist(picker.selected)
+    if not artist:
+        await ctx.send(f"❌ **{picker.selected}** not found.")
+        return
+
+    # Step 2: Fetch Lidarr data
+    folders = []
+    metadata_profiles = []
+    lidarr = None
+    try:
+        from lidarr_client import LidarrClient
+        lidarr = LidarrClient()
+        folders = lidarr.get_root_folders()
+        metadata_profiles = lidarr.get_metadata_profiles()
+    except Exception as e:
+        log.warning("Could not fetch Lidarr data: %s", e)
+
+    # Get current settings
+    current_folder = artist.get("root_folder") or db.get_setting("default_root_folder") or ""
+    current_mode = db.get_setting(f"mode_{artist['name']}") or Config.DOWNLOAD_MODE
+    current_threshold = Config.POPULARITY_THRESHOLD
+    current_meta = db.get_setting(f"meta_profile_{artist['name']}")
+    if current_meta:
+        current_meta = int(current_meta)
+
+    # Step 3: Show the same dialog as ?add, pre-populated
+    view = AddArtistView(
+        author_id=ctx.author.id,
+        display_name=artist["name"],
+        music_id=artist.get("spotify_id"),
+        artist_data=None,
+        folders=folders,
+        metadata_profiles=metadata_profiles,
+        lidarr_client=lidarr,
+    )
+
+    # Pre-populate current values
+    if current_folder:
+        view.selected_folder = current_folder
+        for opt in view.folder_select.options:
+            opt.default = opt.value == current_folder
+    view.selected_mode = current_mode
+    for opt in view.mode_select.options:
+        opt.default = opt.value == current_mode
+    view.threshold = current_threshold
+    if current_meta:
+        view.selected_metadata_profile = current_meta
+        for opt in view.metadata_profile_select.options:
+            opt.default = opt.value == str(current_meta)
+
+    await ctx.send(embed=view.build_embed(), view=view)
+    await view.wait()
+
+    if view.cancelled or not view.confirmed:
+        return
+
+    # Step 4: Apply changes
+    changes = []
+
+    # Folder change — move in Lidarr
+    new_folder = view.selected_folder
+    if new_folder and new_folder != current_folder:
+        db.set_artist_root_folder(artist["name"], new_folder)
+        folder_display = new_folder.rstrip("/").split("/")[-1]
+        changes.append(f"📁 Folder → {folder_display}")
+        # Move in Lidarr
+        lidarr_id = artist.get("lidarr_id")
+        if lidarr_id and lidarr:
+            if lidarr.move_artist(lidarr_id, new_folder):
+                changes.append("  ✅ Moved in Lidarr")
+            else:
+                changes.append("  ⚠️ Failed to move in Lidarr")
+
+    # Mode change
+    if view.selected_mode != current_mode:
+        db.set_setting(f"mode_{artist['name']}", view.selected_mode)
+        changes.append(f"🎛️ Mode → {view.selected_mode}")
+
+    # Threshold change
+    if view.threshold != current_threshold:
+        Config.POPULARITY_THRESHOLD = view.threshold
+        db.set_setting("popularity_threshold", str(view.threshold))
+        changes.append(f"📊 Threshold → {view.threshold}/100")
+
+    # Metadata profile change
+    if view.selected_metadata_profile and view.selected_metadata_profile != current_meta:
+        db.set_setting(f"meta_profile_{artist['name']}", str(view.selected_metadata_profile))
+        meta_display = str(view.selected_metadata_profile)
+        for p in metadata_profiles:
+            if p["id"] == view.selected_metadata_profile:
+                meta_display = p["name"]
+                break
+        changes.append(f"📀 Metadata → {meta_display}")
+
+    if not changes:
+        await ctx.send(f"No changes made to **{artist['name']}**.")
+    else:
+        embed = discord.Embed(
+            title=f"✏️ Updated: {artist['name']}",
+            description="\n".join(changes),
+            color=0x1DB954,
+        )
+        await ctx.send(embed=embed)
 
 
 @bot.command(name="list")

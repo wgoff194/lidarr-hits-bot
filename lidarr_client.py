@@ -82,7 +82,7 @@ class LidarrClient:
         Auto-select metadata profile based on root folder name.
         Comedy folder → Comedy profile
         Soundtracks folder → Soundtrack profile
-        Everything else → default (first profile)
+        Everything else → 99 (Everything) by default
         """
         folder_lower = folder_name.strip().lower()
         profiles = self.get_metadata_profiles()
@@ -96,7 +96,12 @@ class LidarrClient:
                 if "soundtrack" in pname:
                     return p["id"]
 
-        # Default: first profile
+        # Default: 99 - Everything (includes singles)
+        for p in profiles:
+            if "99" in p["name"] or "everything" in p["name"].lower():
+                return p["id"]
+
+        # Fallback: first profile
         return profiles[0]["id"] if profiles else 1
 
     def get_root_folders(self) -> list[dict]:
@@ -324,6 +329,22 @@ class LidarrClient:
             return True
         except requests.HTTPError as e:
             log.error("Failed to unmonitor album %s: %s", album_id, e)
+            return False
+
+    def move_artist(self, lidarr_artist_id: int, new_root_folder: str) -> bool:
+        """Move an artist to a different root folder in Lidarr."""
+        try:
+            artist = self._get(f"/artist/{lidarr_artist_id}")
+            resolved = self.resolve_root_folder(new_root_folder)
+            if not resolved:
+                log.error("Root folder '%s' not found", new_root_folder)
+                return False
+            artist["rootFolderPath"] = resolved
+            self._put(f"/artist/{lidarr_artist_id}", artist)
+            log.info("Moved artist %s to %s", lidarr_artist_id, resolved)
+            return True
+        except requests.HTTPError as e:
+            log.error("Failed to move artist %s: %s", lidarr_artist_id, e)
             return False
 
     # ── Track-level monitoring ────────────────────────────────────────────────
