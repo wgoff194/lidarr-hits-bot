@@ -216,6 +216,10 @@ class LidarrClient:
         try:
             result = self._post("/artist", artist_data)
             log.info("Added artist '%s' to Lidarr (ID %s)", result.get("artistName"), result.get("id"))
+            # Refresh artist so Lidarr fetches album metadata from MusicBrainz
+            if result.get("id"):
+                self._post("/command", {"name": "RefreshArtist", "artistIds": [result["id"]]})
+                log.info("Triggered refresh for artist ID %s", result["id"])
             return result
         except requests.HTTPError as e:
             error_body = ""

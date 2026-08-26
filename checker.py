@@ -125,7 +125,13 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
 
             # ── Step 5: Find the album in Lidarr ─────────────────────────
             try:
+                # If artist was just added, wait for Lidarr to refresh albums
                 lidarr_albums = lidarr.get_artist_albums(lidarr_artist_id)
+                if not lidarr_albums:
+                    import time
+                    log.info("No albums yet for artist %s, waiting 10s for Lidarr refresh...", artist["name"])
+                    time.sleep(10)
+                    lidarr_albums = lidarr.get_artist_albums(lidarr_artist_id)
                 matched = _match_album(album.name, lidarr_albums)
 
                 if not matched:
@@ -305,17 +311,22 @@ def _download_popular_tracks(
 
 
 def _match_album(album_name: str, lidarr_albums: list[dict]) -> dict | None:
-    """Try to match a Spotify album name to a Lidarr album."""
-    album_lower = album_name.strip().lower()
+    """Try to match a Deezer album name to a Lidarr album."""
+    import re
+    def normalize(s: str) -> str:
+        # Strip punctuation, lowercase, collapse whitespace
+        return re.sub(r'[^\w\s]', '', s.strip().lower()).strip()
 
-    # Exact match first
+    album_lower = normalize(album_name)
+
+    # Exact match first (normalized)
     for la in lidarr_albums:
-        if la.get("title", "").strip().lower() == album_lower:
+        if normalize(la.get("title", "")) == album_lower:
             return la
 
-    # Contains match
+    # Contains match (normalized)
     for la in lidarr_albums:
-        lidarr_lower = la.get("title", "").strip().lower()
+        lidarr_lower = normalize(la.get("title", ""))
         if album_lower in lidarr_lower or lidarr_lower in album_lower:
             return la
 
