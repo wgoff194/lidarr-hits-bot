@@ -967,12 +967,24 @@ async def update_cmd(ctx: commands.Context, *, artist_name: str = None):
         try:
             artist_data = lidarr.get_artist(lidarr_id)
             if artist_data:
+                log.info("Before update — artist '%s': metadataProfileId=%s, rootFolderPath=%s",
+                         artist["name"], artist_data.get("metadataProfileId"), artist_data.get("rootFolderPath"))
+
                 # Update metadata profile
                 if view.selected_metadata_profile and view.selected_metadata_profile != current_meta:
                     artist_data["metadataProfileId"] = view.selected_metadata_profile
-                    lidarr._put(f"/artist/{lidarr_id}", artist_data)
-                    log.info("Updated metadata profile for %s to %s in Lidarr",
-                             artist["name"], view.selected_metadata_profile)
+                    log.info("Setting metadataProfileId to %s", view.selected_metadata_profile)
+                    result = lidarr._put(f"/artist/{lidarr_id}", artist_data)
+                    log.info("PUT response — metadataProfileId=%s", result.get("metadataProfileId"))
+
+                    # Verify it stuck
+                    verify = lidarr.get_artist(lidarr_id)
+                    log.info("After PUT verify — metadataProfileId=%s", verify.get("metadataProfileId"))
+                    if verify.get("metadataProfileId") == view.selected_metadata_profile:
+                        log.info("✅ Metadata profile confirmed in Lidarr")
+                    else:
+                        log.warning("⚠️ Metadata profile mismatch! Sent %s, got %s",
+                                    view.selected_metadata_profile, verify.get("metadataProfileId"))
 
                 # Move artist if folder changed (triggers file move)
                 if new_folder and new_folder != current_folder:
