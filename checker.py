@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import database as db
 from config import Config
 from lidarr_client import LidarrClient
-from spotify_client import AlbumInfo, SpotifyClient
+from music_client import AlbumInfo, MusicClient
 
 log = logging.getLogger(__name__)
 
@@ -41,9 +41,9 @@ def run_daily_check() -> list[CheckResult]:
     log.info("Starting daily check for %d artists (mode: %s)...", len(artists), Config.DOWNLOAD_MODE)
 
     try:
-        spotify = SpotifyClient()
+        spotify = MusicClient()
     except ValueError as e:
-        log.error("Spotify client init failed: %s", e)
+        log.error("Music client init failed: %s", e)
         return []
 
     try:

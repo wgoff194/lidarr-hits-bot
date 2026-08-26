@@ -24,7 +24,7 @@ from croniter import croniter
 import database as db
 from checker import format_results, run_daily_check
 from config import Config
-from spotify_client import SpotifyClient
+from music_client import MusicClient
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 
@@ -330,7 +330,7 @@ class AddArtistView(discord.ui.View):
                 color=0x1DB954,
             )
 
-        # Spotify info
+        # Artist info
         if self.spotify_data:
             genres = self.spotify_data.get("genres", [])
             if genres:
@@ -339,11 +339,17 @@ class AddArtistView(discord.ui.View):
                     value=", ".join(genres[:3]),
                     inline=True,
                 )
-            popularity = self.spotify_data.get("popularity")
-            if popularity is not None:
+            nb_fan = self.spotify_data.get("nb_fan")
+            if nb_fan:
+                if nb_fan >= 1_000_000:
+                    fan_str = f"{nb_fan / 1_000_000:.1f}M"
+                elif nb_fan >= 1_000:
+                    fan_str = f"{nb_fan / 1_000:.0f}K"
+                else:
+                    fan_str = str(nb_fan)
                 embed.add_field(
-                    name="Spotify Popularity",
-                    value=f"{popularity}/100",
+                    name="👥 Fans",
+                    value=fan_str,
                     inline=True,
                 )
 
@@ -393,7 +399,7 @@ async def help_cmd(ctx: commands.Context):
         name="How it works",
         value=(
             "Every day at the scheduled time, the bot checks each tracked artist "
-            "on Spotify for new releases. If an album has tracks above the "
+            "on Deezer for new releases. If an album has tracks above the "
             f"popularity threshold (**{Config.POPULARITY_THRESHOLD}**/100), "
             "it gets processed.\n\n"
             "**Tracks mode** (default): Only the popular tracks are monitored in Lidarr.\n"
@@ -418,16 +424,16 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
     spotify_id = None
     display_name = artist_name
     try:
-        sp = SpotifyClient()
+        sp = MusicClient()
         found = sp.search_artist(artist_name)
         if not found:
-            await ctx.send(f"❌ Couldn't find **{artist_name}** on Spotify. Check the spelling?")
+            await ctx.send(f"❌ Couldn't find **{artist_name}** on Deezer. Check the spelling?")
             return
         spotify_id = found["id"]
         display_name = found["name"]
         spotify_data = found  # Contains genres, popularity, images, etc.
     except Exception as e:
-        log.warning("Spotify lookup failed for '%s': %s", artist_name, e)
+        log.warning("Music lookup failed for '%s': %s", artist_name, e)
 
     # Check if already in watchlist
     existing = db.get_artist(display_name)

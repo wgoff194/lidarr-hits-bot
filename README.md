@@ -5,8 +5,8 @@ A Discord bot that tracks your favorite artists and only adds **popular** new re
 ## How It Works
 
 1. You add artists via Discord (`?add Linkin Park`)
-2. Every day, the bot checks Spotify for new releases from your tracked artists
-3. If an album's average track popularity is above your threshold (default: 60/100), it gets added to Lidarr
+2. Every day, the bot checks Deezer for new releases from your tracked artists
+3. If an album has tracks above your popularity threshold (default: 60/100), it gets added to Lidarr
 4. Lidarr handles the actual download
 
 ## Setup
@@ -22,19 +22,12 @@ A Discord bot that tracks your favorite artists and only adds **popular** new re
    - Bot Permissions: `Send Messages`, `Embed Links`, `Read Message History`
 6. Copy the generated URL and open it to invite the bot to your server
 
-### 2. Get Spotify API Credentials
-
-1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
-2. Click **Create App**
-3. Name it anything, set redirect URL to `http://localhost` (won't be used)
-4. Copy the **Client ID** and **Client Secret**
-
-### 3. Get Your Lidarr API Key
+### 2. Get Your Lidarr API Key
 
 1. Open Lidarr → **Settings** → **General**
 2. Copy the **API Key**
 
-### 4. Configure
+### 3. Configure
 
 ```bash
 cp .env.example .env
@@ -42,7 +35,7 @@ cp .env.example .env
 nano .env
 ```
 
-### 5. Deploy with Docker (Portainer)
+### 4. Deploy with Docker (Portainer)
 
 **Option A: Portainer Stack**
 1. In Portainer, go to **Stacks** → **Add Stack**
@@ -62,7 +55,7 @@ docker build -t lidarr-hits-bot .
 docker run -d --name lidarr-hits-bot --env-file .env -v bot-data:/data lidarr-hits-bot
 ```
 
-### 6. Lidarr URL Notes
+### 5. Lidarr URL Notes
 
 | Lidarr Location | LIDARR_URL |
 |---|---|
@@ -89,7 +82,7 @@ docker run -d --name lidarr-hits-bot --env-file .env -v bot-data:/data lidarr-hi
 
 When you run `?add Linkin Park`, the bot:
 
-1. Validates the artist on Spotify (shows genres, popularity)
+1. Validates the artist on Deezer (shows fan count)
 2. Presents an interactive dialog with:
    - **📁 Root Folder** dropdown (pre-selected to your default)
    - **🎛️ Mode** dropdown (tracks only / full album)
@@ -127,7 +120,7 @@ The bot auto-discovers your Lidarr root folders — no need to type paths. Just 
 
 ## Popularity Threshold
 
-Spotify rates every track 0-100 for popularity. The bot uses this to decide what's worth downloading:
+Deezer tracks are scored 0-100 for popularity based on the artist's top tracks. The bot uses this to decide what's worth downloading:
 
 | Threshold | What you get |
 |---|---|
@@ -149,7 +142,7 @@ lidarr-hits-bot/
 ├── config.py           # Environment variable config
 ├── database.py         # SQLite watchlist storage
 ├── lidarr_client.py    # Lidarr API client
-├── spotify_client.py   # Spotify API client
+├── music_client.py     # Deezer API client (free, no auth)
 ├── requirements.txt    # Python dependencies
 ├── Dockerfile          # Container build
 ├── docker-compose.yml  # Easy deployment
@@ -163,9 +156,9 @@ lidarr-hits-bot/
 - Make sure Message Content Intent is enabled in the Discord Developer Portal
 - Check the bot has permissions in the channel
 
-**Spotify errors:**
-- Verify Client ID and Client Secret are correct
-- Make sure there are no extra spaces in the .env values
+**Music API errors:**
+- Deezer is free and requires no API key — if it's down, the bot will retry on the next check
+- Rate limiting: Deezer allows ~50 requests/second, the bot is well under that
 
 **Lidarr connection fails:**
 - Test the URL manually: `curl http://your-lidarr-url:8686/api/v1/system/status?apiKey=YOUR_KEY`

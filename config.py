@@ -13,6 +13,8 @@ class Config:
     REPORT_CHANNEL_ID: int = int(os.getenv("REPORT_CHANNEL_ID", "0"))
 
     # Spotify (Client Credentials flow — no user login needed)
+    # DEPRECATED: Spotify now requires Premium. Using Deezer instead.
+    # These are kept for backward compatibility but not used.
     SPOTIFY_CLIENT_ID: str = os.getenv("SPOTIFY_CLIENT_ID", "")
     SPOTIFY_CLIENT_SECRET: str = os.getenv("SPOTIFY_CLIENT_SECRET", "")
     # Minimum popularity score (0-100) to consider a track "popular"
