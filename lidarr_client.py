@@ -295,6 +295,37 @@ class LidarrClient:
             return self.search_album(album_id)
         return False
 
+    # ── Track files (downloaded) ─────────────────────────────────────────────
+
+    def get_album_track_files(self, album_id: int) -> list[dict]:
+        """Get downloaded track files for an album."""
+        try:
+            return self._get("/trackfile", params={"albumId": album_id})
+        except requests.HTTPError:
+            return []
+
+    def delete_track_file(self, track_file_id: int) -> bool:
+        """Delete a downloaded track file from disk."""
+        try:
+            url = f"{self.base}/api/v1/trackfile/{track_file_id}"
+            resp = requests.delete(url, headers=self.headers, timeout=30)
+            resp.raise_for_status()
+            return True
+        except requests.HTTPError as e:
+            log.error("Failed to delete track file %s: %s", track_file_id, e)
+            return False
+
+    def unmonitor_album(self, album_id: int) -> bool:
+        """Set an album to unmonitored so Lidarr won't re-download."""
+        try:
+            album = self._get(f"/album/{album_id}")
+            album["monitored"] = False
+            self._put(f"/album/{album_id}", album)
+            return True
+        except requests.HTTPError as e:
+            log.error("Failed to unmonitor album %s: %s", album_id, e)
+            return False
+
     # ── Track-level monitoring ────────────────────────────────────────────────
 
     def get_album_tracks(self, album_id: int) -> list[dict]:

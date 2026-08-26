@@ -22,7 +22,7 @@ from discord.ext import commands, tasks
 from croniter import croniter
 
 import database as db
-from checker import format_results, run_daily_check
+from checker import format_results, format_prune_results, run_daily_check, prune_downloaded_albums
 from config import Config
 from music_client import MusicClient
 
@@ -152,7 +152,6 @@ class AddArtistView(discord.ui.View):
 
         # Populate the folder dropdown
         self._setup_folder_select()
-        self._setup_mode_select()
         self._setup_metadata_profile_select()
 
     def _setup_folder_select(self):
@@ -263,45 +262,13 @@ class AddArtistView(discord.ui.View):
             embed=self.build_embed(), view=self
         )
 
-    # ── Mode dropdown ────────────────────────────────────────────────────
-
-    @discord.ui.select(
-        placeholder="🎛️ Download mode...",
-        options=[
-            discord.SelectOption(
-                label="Tracks Only",
-                value="tracks",
-                description="Only popular tracks above threshold",
-                emoji="🎵",
-            ),
-            discord.SelectOption(
-                label="Full Album",
-                value="album",
-                description="Download the entire album",
-                emoji="💿",
-            ),
-        ],
-        min_values=1,
-        max_values=1,
-        row=1,
-    )
-    async def mode_select(
-        self, interaction: discord.Interaction, select: discord.ui.Select
-    ):
-        self.selected_mode = select.values[0]
-        for opt in select.options:
-            opt.default = opt.value == self.selected_mode
-        await interaction.response.edit_message(
-            embed=self.build_embed(), view=self
-        )
-
     # ── Metadata profile dropdown ────────────────────────────────────────
 
     @discord.ui.select(
         placeholder="📀 Metadata profile...",
         min_values=1,
         max_values=1,
-        row=2,
+        row=1,
     )
     async def metadata_profile_select(
         self, interaction: discord.Interaction, select: discord.ui.Select
@@ -438,7 +405,6 @@ class AddArtistView(discord.ui.View):
         mode_display = "🎵 Tracks Only" if self.selected_mode == "tracks" else "💿 Full Album"
 
         embed.add_field(name="📁 Root Folder", value=folder_display, inline=True)
-        embed.add_field(name="🎛️ Mode", value=mode_display, inline=True)
         embed.add_field(name="📊 Threshold", value=f"{self.threshold}/100", inline=True)
 
         # Metadata profile
@@ -475,6 +441,7 @@ async def help_cmd(ctx: commands.Context):
             f"`{prefix}list` — Show watchlist\n"
             f"`{prefix}check` — Run popularity check (recent releases)\n"
             f"`{prefix}scan` — Full catalog scan (pick artist or all)\n"
+            f"`{prefix}prune` — Delete below-threshold tracks from downloaded albums\n"
             f"`{prefix}threshold <0-100>` — View/set popularity threshold\n"
             f"`{prefix}mode <tracks|album>` — Download popular tracks only, or whole albums\n"
             f"`{prefix}folder` — Show/set root folders\n"
@@ -600,7 +567,6 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
         description=(
             f"**{display_name}** is now being tracked.\n\n"
             f"📁 **Folder:** {folder_display}\n"
-            f"🎛️ **Mode:** {view.selected_mode}\n"
             f"📊 **Threshold:** {view.threshold}/100\n"
             f"📀 **Metadata:** {meta_display}"
         ),
@@ -885,6 +851,16 @@ async def scan_cmd(ctx: commands.Context):
         report = report[len(chunk):]
 
 
+@bot.command(name="prune")
+async def prune_cmd(ctx: commands.Context):
+    """Prune downloaded albums — delete below-threshold tracks and unmonitor."""
+    await ctx.send("✂️ Checking for downloaded albums to prune...")
+    loop = asyncio.get_event_loop()
+    results = await loop.run_in_executor(None, prune_downloaded_albums)
+    report = format_prune_results(results)
+    await ctx.send(report)
+
+
 @bot.command(name="threshold")
 async def threshold_cmd(ctx: commands.Context, value: int = None):
     """Show or set the popularity threshold."""
@@ -1063,6 +1039,13 @@ async def daily_check_loop():
                         chunk = report[:split_at]
                 await channel.send(chunk)
                 report = report[len(chunk):]
+
+            # Auto-prune after daily check
+            log.info("Running auto-prune after daily check...")
+            prune_results = await loop.run_in_executor(None, prune_downloaded_albums)
+            prune_report = format_prune_results(prune_results)
+            if "Nothing to prune" not in prune_report:
+                await channel.send(prune_report)
         else:
             log.error("Report channel %s not found!", channel_id)
     else:

@@ -154,52 +154,28 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
 
                 album_id = matched["id"]
 
-                if Config.DOWNLOAD_MODE == "tracks":
-                    # ── Track-level: cherry-pick only popular tracks ─────
-                    success, track_stats = _download_popular_tracks(
-                        lidarr, album_id, album, artist["id"]
-                    )
-                    db.log_check(artist["id"], album.name, album.deezer_url, album.avg_popularity, success)
-                    if success:
-                        if track_stats["new"] > 0:
-                            result.albums_added += 1
-                            result.tracks_added += track_stats["new"]
-                            result.newly_popular_tracks += track_stats["new"]
-                            result.added_albums.append(
-                                f"{album.name} — {track_stats['new']} new track(s) "
-                                f"({track_stats['already']} already monitored, "
-                                f"{track_stats['unmonitored']} skipped)"
-                            )
-                        else:
-                            result.albums_skipped += 1
-                            result.skipped_albums.append(
-                                f"{album.name} (all {track_stats['already']} popular track(s) already monitored)"
-                            )
-                    else:
-                        result.errors.append(f"Failed to configure tracks for {album.name}")
-                else:
-                    # ── Album-level: grab the whole thing ────────────────
-                    # Check if we already processed this album
-                    already_monitored = db.get_monitored_tracks(artist["id"], album.name)
-                    if already_monitored:
-                        result.albums_skipped += 1
-                        result.skipped_albums.append(f"{album.name} (already processed)")
-                        continue
+                # ── Album-level: monitor and search ─────────────────────
+                # Check if we already processed this album
+                already_monitored = db.get_monitored_tracks(artist["id"], album.name)
+                if already_monitored:
+                    result.albums_skipped += 1
+                    result.skipped_albums.append(f"{album.name} (already processed)")
+                    continue
 
-                    success = lidarr.monitor_and_search_album(album_id)
-                    db.log_check(artist["id"], album.name, album.deezer_url, album.avg_popularity, success)
-                    if success:
-                        result.albums_added += 1
-                        result.added_albums.append(
-                            f"{album.name} (pop: {album.avg_popularity}, type: {album.album_type})"
-                        )
-                        # Record so we don't re-add
-                        db.record_monitored_tracks(artist["id"], album.name, [
-                            {"name": tp.name, "popularity": tp.popularity}
-                            for tp in album.track_popularities
-                        ])
-                    else:
-                        result.errors.append(f"Failed to trigger download for {album.name}")
+                success = lidarr.monitor_and_search_album(album_id)
+                db.log_check(artist["id"], album.name, album.deezer_url, album.avg_popularity, success)
+                if success:
+                    result.albums_added += 1
+                    result.added_albums.append(
+                        f"{album.name} (pop: {album.avg_popularity}, type: {album.album_type})"
+                    )
+                    # Record so we don't re-add
+                    db.record_monitored_tracks(artist["id"], album.name, [
+                        {"name": tp.name, "popularity": tp.popularity}
+                        for tp in album.track_popularities
+                    ])
+                else:
+                    result.errors.append(f"Failed to trigger download for {album.name}")
 
             except Exception as e:
                 result.errors.append(f"Lidarr error for {album.name}: {e}")
@@ -212,115 +188,163 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
     return results
 
 
-def _download_popular_tracks(
-    lidarr: LidarrClient,
-    album_id: int,
-    album: AlbumInfo,
-    artist_id: int,
-) -> tuple[bool, dict]:
+# ── Prune downloaded albums ──────────────────────────────────────────────────
+
+@dataclass
+class PruneResult:
+    """Summary of what the prune found for one album."""
+    artist_name: str
+    album_name: str
+    total_tracks: int = 0
+    kept_tracks: int = 0
+    pruned_tracks: int = 0
+    already_pruned: bool = False
+    error: str = ""
+
+
+def prune_downloaded_albums() -> list[PruneResult]:
     """
-    Track-level download: check which popular tracks are already monitored,
-    then only monitor NEW ones that crossed the threshold since last check.
-    Returns (success, stats_dict).
+    Check all artists for downloaded albums. For each:
+    1. Find tracks above the popularity threshold
+    2. Delete below-threshold track files from disk
+    3. Unmonitor the album so Lidarr doesn't re-download
     """
-    # First, make sure the album itself is monitored
-    lidarr.monitor_album(album_id)
+    artists = db.list_artists()
+    if not artists:
+        return []
 
-    # Get Lidarr's tracks for this album
-    lidarr_tracks = lidarr.get_album_tracks(album_id)
-    if not lidarr_tracks:
-        log.warning("No tracks found in Lidarr for album %s", album_id)
-        return False, {"new": 0, "already": 0, "unmonitored": 0}
+    try:
+        music = MusicClient()
+    except ValueError:
+        return []
 
-    # Get tracks we've already monitored for this album
-    already_monitored_names = db.get_monitored_tracks(artist_id, album.name)
+    try:
+        lidarr = LidarrClient()
+    except ValueError:
+        return []
 
-    # Build a set of ALL popular track names from Spotify
-    popular_names = {
-        tp.name.strip().lower()
-        for tp in album.track_popularities
-        if tp.popularity >= Config.POPULARITY_THRESHOLD
-    }
+    results: list[PruneResult] = []
 
-    if not popular_names:
-        log.info("No tracks above threshold for album %s", album.name)
-        return False, {"new": 0, "already": len(already_monitored_names), "unmonitored": len(lidarr_tracks)}
+    for artist in artists:
+        lidarr_artist_id = artist.get("lidarr_id")
+        if not lidarr_artist_id:
+            continue
 
-    # Figure out which popular tracks are NEW (not already monitored)
-    new_popular_names = {
-        name for name in popular_names
-        if name not in already_monitored_names
-    }
+        # Get albums from Lidarr
+        try:
+            lidarr_albums = lidarr.get_artist_albums(lidarr_artist_id)
+        except Exception:
+            continue
 
-    # Match NEW popular tracks to Lidarr track IDs
-    new_track_ids: set[int] = set()
-    new_track_info: list[dict] = []
-    for lt in lidarr_tracks:
-        lidarr_title = lt.get("title", "").strip().lower()
-        matched = False
-        # Exact match
-        if lidarr_title in new_popular_names:
-            matched = True
+        # Get Deezer top tracks for popularity reference
+        music_id = artist.get("spotify_id")
+        if not music_id:
+            continue
+
+        try:
+            top_tracks = music.get_artist_top_tracks(music_id)
+        except Exception:
+            top_tracks = []
+
+        top_track_ids = {t["id"] for t in top_tracks if t.get("id")}
+        top_track_ranks = {t["id"]: i for i, t in enumerate(top_tracks) if t.get("id")}
+
+        for la in lidarr_albums:
+            album_id = la["id"]
+            album_name = la.get("title", "Unknown")
+
+            # Check if already pruned
+            pruned_key = f"pruned_{artist['id']}_{album_name}"
+            if db.get_setting(pruned_key):
+                continue
+
+            # Get downloaded track files
+            track_files = lidarr.get_album_track_files(album_id)
+            if not track_files:
+                continue
+
+            # Get Lidarr tracks for this album to match with files
+            lidarr_tracks = lidarr.get_album_tracks(album_id)
+            if not lidarr_tracks:
+                continue
+
+            # Build a map of trackId -> track info
+            track_map = {t["id"]: t for t in lidarr_tracks}
+
+            # Score each track file
+            keep_files: list[dict] = []
+            prune_files: list[dict] = []
+
+            for tf in track_files:
+                track_id = tf.get("trackId")
+                track_info = track_map.get(track_id, {})
+                track_title = track_info.get("title", "Unknown")
+
+                # Calculate popularity score
+                score = music._calculate_track_score(
+                    track_id, top_track_ids, top_track_ranks, len(top_tracks)
+                )
+
+                if score >= Config.POPULARITY_THRESHOLD:
+                    keep_files.append(tf)
+                else:
+                    prune_files.append(tf)
+
+            # Only prune if there are tracks to prune AND tracks to keep
+            if not prune_files or not keep_files:
+                if keep_files:
+                    # All tracks are popular, just mark as pruned
+                    db.set_setting(pruned_key, "all_popular")
+                continue
+
+            # Delete below-threshold tracks
+            deleted = 0
+            for tf in prune_files:
+                if lidarr.delete_track_file(tf["id"]):
+                    deleted += 1
+                    log.info("Pruned '%s' from '%s' by %s", 
+                             track_map.get(tf.get("trackId"), {}).get("title", "?"),
+                             album_name, artist["name"])
+
+            # Unmonitor the album so Lidarr doesn't re-download
+            lidarr.unmonitor_album(album_id)
+
+            # Mark as pruned
+            db.set_setting(pruned_key, f"kept:{len(keep_files)}_pruned:{deleted}")
+
+            results.append(PruneResult(
+                artist_name=artist["name"],
+                album_name=album_name,
+                total_tracks=len(track_files),
+                kept_tracks=len(keep_files),
+                pruned_tracks=deleted,
+            ))
+
+    return results
+
+
+def format_prune_results(results: list[PruneResult]) -> str:
+    """Format prune results into a Discord-friendly message."""
+    if not results:
+        return "✂️ Nothing to prune — no new downloaded albums found."
+
+    lines = ["✂️ **Prune Complete**\n"]
+    total_pruned = 0
+    total_kept = 0
+
+    for r in results:
+        if r.error:
+            lines.append(f"**{r.artist_name}** — {r.album_name}: ❌ {r.error}")
         else:
-            # Fuzzy: check if any popular name is a substring
-            for pn in new_popular_names:
-                if pn in lidarr_title or lidarr_title in pn:
-                    matched = True
-                    break
+            lines.append(
+                f"**{r.artist_name}** — {r.album_name}: "
+                f"kept {r.kept_tracks}, pruned {r.pruned_tracks}"
+            )
+            total_pruned += r.pruned_tracks
+            total_kept += r.kept_tracks
 
-        if matched:
-            new_track_ids.add(lt["id"])
-            # Find the Spotify popularity for this track
-            pop_score = 0
-            for tp in album.track_popularities:
-                if tp.name.strip().lower() == lidarr_title:
-                    pop_score = tp.popularity
-                    break
-            new_track_info.append({
-                "name": lt.get("title", "Unknown"),
-                "popularity": pop_score,
-                "lidarr_track_id": lt["id"],
-            })
-
-    already_count = len(already_monitored_names)
-
-    if not new_track_ids:
-        if already_count > 0:
-            log.info("Album '%s': all %d popular track(s) already monitored", album.name, already_count)
-            return True, {"new": 0, "already": already_count, "unmonitored": len(lidarr_tracks) - already_count}
-        log.warning(
-            "Could not match any popular tracks to Lidarr tracks for %s. "
-            "Spotify names: %s | Lidarr names: %s",
-            album.name, popular_names, [t.get("title") for t in lidarr_tracks],
-        )
-        return False, {"new": 0, "already": 0, "unmonitored": len(lidarr_tracks)}
-
-    # Get ALL currently popular track IDs (new + already monitored) for full monitoring state
-    all_popular_ids: set[int] = set()
-    for lt in lidarr_tracks:
-        lidarr_title = lt.get("title", "").strip().lower()
-        if lidarr_title in popular_names:
-            all_popular_ids.add(lt["id"])
-        else:
-            for pn in popular_names:
-                if pn in lidarr_title or lidarr_title in pn:
-                    all_popular_ids.add(lt["id"])
-                    break
-
-    # Cherry-pick: unmonitor all, monitor only the hits (new + existing popular)
-    stats = lidarr.monitor_specific_tracks(album_id, all_popular_ids)
-    log.info(
-        "Album '%s': %d NEW track(s) added, %d already monitored, %d unmonitored",
-        album.name, len(new_track_ids), already_count, stats["unmonitored"],
-    )
-
-    # Record the newly monitored tracks in the DB
-    db.record_monitored_tracks(artist_id, album.name, new_track_info)
-
-    # Trigger the search (Lidarr will only grab the monitored tracks)
-    lidarr.search_album(album_id)
-
-    return True, {"new": len(new_track_ids), "already": already_count, "unmonitored": stats["unmonitored"]}
+    lines.append(f"\n**Summary:** {total_kept} track(s) kept, {total_pruned} pruned")
+    return "\n".join(lines)
 
 
 def _match_album(album_name: str, lidarr_albums: list[dict]) -> dict | None:
