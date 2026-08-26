@@ -347,6 +347,23 @@ class LidarrClient:
             log.error("Failed to move artist %s: %s", lidarr_artist_id, e)
             return False
 
+    def get_artist_details(self, lidarr_artist_id: int) -> Optional[dict]:
+        """Get full artist details including rootFolderPath and metadataProfileId."""
+        try:
+            return self._get(f"/artist/{lidarr_artist_id}")
+        except requests.HTTPError:
+            return None
+
+    def unmonitor_all_albums(self, lidarr_artist_id: int) -> int:
+        """Unmonitor all albums for an artist. Returns count unmonitored."""
+        albums = self.get_artist_albums(lidarr_artist_id)
+        count = 0
+        for a in albums:
+            if a.get("monitored"):
+                self.unmonitor_album(a["id"])
+                count += 1
+        return count
+
     # ── Track-level monitoring ────────────────────────────────────────────────
 
     def get_album_tracks(self, album_id: int) -> list[dict]:

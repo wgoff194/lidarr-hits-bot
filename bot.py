@@ -543,6 +543,7 @@ async def help_cmd(ctx: commands.Context):
         name="Commands",
         value=(
             f"`{prefix}add <artist>` — Add artist (interactive setup dialog)\n"
+            f"`{prefix}import` — Import existing Lidarr artists into watchlist\n"
             f"`{prefix}update` — Update artist settings (folder, mode, metadata)\n"
             f"`{prefix}remove <artist>` — Stop tracking\n"
             f"`{prefix}list` — Show watchlist\n"
@@ -1443,6 +1444,98 @@ async def check_downloads_cmd(ctx: commands.Context):
     results = await loop.run_in_executor(None, check_downloads)
     report = format_download_check_results(results)
     await ctx.send(report)
+
+
+@bot.command(name="import")
+async def import_cmd(ctx: commands.Context):
+    """Import existing Lidarr artists into the bot watchlist."""
+    await ctx.send("📥 Importing artists from Lidarr...")
+
+    try:
+        from lidarr_client import LidarrClient
+        lidarr = LidarrClient()
+    except Exception as e:
+        await ctx.send(f"❌ Couldn't connect to Lidarr: {e}")
+        return
+
+    # Get all artists from Lidarr
+    try:
+        lidarr_artists = lidarr.get_all_artists()
+    except Exception as e:
+        await ctx.send(f"❌ Failed to fetch artists from Lidarr: {e}")
+        return
+
+    # Get existing watchlist
+    existing = {a["name"].lower() for a in db.list_artists()}
+    existing_lidarr_ids = {a.get("lidarr_id") for a in db.list_artists() if a.get("lidarr_id")}
+
+    added = []
+    skipped = []
+
+    for la in lidarr_artists:
+        artist_name = la.get("artistName", "Unknown")
+        lidarr_id = la.get("id")
+
+        # Skip if already in watchlist (by name or lidarr_id)
+        if artist_name.lower() in existing or lidarr_id in existing_lidarr_ids:
+            skipped.append(artist_name)
+            continue
+
+        # Get artist details from Lidarr
+        details = lidarr.get_artist_details(lidarr_id)
+        if not details:
+            continue
+
+        # Extract root folder name
+        root_path = details.get("rootFolderPath", "")
+        root_folder = root_path if root_path else None
+
+        # Extract metadata profile ID
+        meta_profile_id = details.get("metadataProfileId")
+
+        # Get Deezer ID for the artist
+        music_id = None
+        try:
+            sp = MusicClient()
+            found = sp.search_artist(artist_name)
+            if found:
+                music_id = found["id"]
+        except Exception:
+            pass
+
+        # Add to watchlist
+        success = db.add_artist(artist_name, "imported", music_id, root_folder=root_folder)
+        if not success:
+            skipped.append(artist_name)
+            continue
+
+        # Set mode to album
+        db.set_setting(f"mode_{artist_name}", "album")
+
+        # Set metadata profile
+        if meta_profile_id:
+            db.set_setting(f"meta_profile_{artist_name}", str(meta_profile_id))
+
+        # Unmonitor all albums (artist stays monitored)
+        unmonitored = lidarr.unmonitor_all_albums(lidarr_id)
+
+        # Store lidarr_id
+        db.update_artist_lidarr_id(artist_name, lidarr_id)
+
+        folder_display = root_folder.rstrip("/").split("/")[-1] if root_folder else "default"
+        added.append(f"{artist_name} (📁 {folder_display}, {unmonitored} albums unmonitored)")
+
+    # Report
+    embed = discord.Embed(title="📥 Import Complete", color=0x1DB954)
+    if added:
+        embed.add_field(name=f"Added ({len(added)})", value="\n".join(added[:20]), inline=False)
+        if len(added) > 20:
+            embed.set_footer(text=f"... and {len(added) - 20} more")
+    if skipped:
+        embed.add_field(name=f"Skipped ({len(skipped)})", value=f"{len(skipped)} already in watchlist", inline=False)
+    if not added and not skipped:
+        embed.description = "No artists found in Lidarr."
+    await ctx.send(embed=embed)
 
 
 @bot.command(name="threshold")
