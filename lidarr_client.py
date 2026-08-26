@@ -266,11 +266,11 @@ class LidarrClient:
         return self._get("/track", params={"albumId": album_id})
 
     def set_track_monitored(self, track_id: int, monitored: bool) -> bool:
-        """Set a single track's monitored flag."""
+        """Set a single track's monitored flag. Uses batch endpoint."""
         try:
             track = self._get(f"/track/{track_id}")
             track["monitored"] = monitored
-            self._put(f"/track/{track_id}", track)
+            self._put("/track", [track])
             return True
         except requests.HTTPError as e:
             log.error("Failed to set track %s monitored=%s: %s", track_id, monitored, e)
@@ -286,11 +286,12 @@ class LidarrClient:
         tracks = self.get_album_tracks(album_id)
         stats = {"monitored": 0, "unmonitored": 0, "errors": 0}
 
+        # Build the batch update — set all tracks in one PUT
+        updated_tracks = []
         for track in tracks:
             tid = track["id"]
             should_monitor = tid in track_ids_to_monitor
 
-            # Skip if already in the right state
             if track.get("monitored") == should_monitor:
                 if should_monitor:
                     stats["monitored"] += 1
@@ -298,12 +299,19 @@ class LidarrClient:
                     stats["unmonitored"] += 1
                 continue
 
-            if self.set_track_monitored(tid, should_monitor):
-                if should_monitor:
-                    stats["monitored"] += 1
-                else:
-                    stats["unmonitored"] += 1
-            else:
-                stats["errors"] += 1
+            track["monitored"] = should_monitor
+            updated_tracks.append(track)
+
+        if updated_tracks:
+            try:
+                self._put("/track", updated_tracks)
+                for t in updated_tracks:
+                    if t["monitored"]:
+                        stats["monitored"] += 1
+                    else:
+                        stats["unmonitored"] += 1
+            except requests.HTTPError as e:
+                log.error("Failed to batch update tracks: %s", e)
+                stats["errors"] += len(updated_tracks)
 
         return stats
