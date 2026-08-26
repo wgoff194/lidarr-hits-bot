@@ -260,14 +260,7 @@ class MusicClient:
                     continue
                 albums_seen.add(aid)
 
-                # Skip compilations with very few tracks (likely noise)
-                nb_tracks = album.get("nb_tracks", 0)
                 record_type = album.get("record_type", "album")
-                log.info("Checking album '%s': nb_tracks=%d, type=%s, id=%s",
-                         album.get("title", "?"), nb_tracks, record_type, aid)
-                if nb_tracks < 1:
-                    log.info("  → skipped (nb_tracks < 1)")
-                    continue
 
                 # Get album tracks
                 try:
