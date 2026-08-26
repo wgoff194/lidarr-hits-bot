@@ -7,7 +7,7 @@ from typing import Optional
 
 import requests
 
-from config import Config
+from lidarr_hits_bot.config import Config
 
 log = logging.getLogger(__name__)
 

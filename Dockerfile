@@ -7,13 +7,15 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY *.py ./
+COPY run.py .
+COPY lidarr_hits_bot/ lidarr_hits_bot/
 
 # Create data directory for SQLite DB
 RUN mkdir -p /data
 
-# Environment defaults (override in docker-compose or .env)
+# Environment defaults
 ENV DB_PATH=/data/watchlist.db
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 
-CMD ["python", "bot.py"]
+CMD ["python", "run.py"]

@@ -3,10 +3,10 @@
 import logging
 from dataclasses import dataclass, field
 
-import database as db
-from config import Config
-from lidarr_client import LidarrClient
-from music_client import AlbumInfo, MusicClient
+from lidarr_hits_bot import database as db
+from lidarr_hits_bot.config import Config
+from lidarr_hits_bot.clients.lidarr import LidarrClient
+from lidarr_hits_bot.clients.deezer import AlbumInfo, MusicClient
 
 log = logging.getLogger(__name__)
 
@@ -434,7 +434,7 @@ def prune_single_album(artist_id: int, artist_name: str, album_name: str,
     music_id = artist.get("spotify_id")
 
     # Get unified popularity scores (Last.fm primary, Deezer fallback)
-    from popularity import get_artist_track_scores, score_track
+    from lidarr_hits_bot.utils.popularity import get_artist_track_scores, score_track
     scores = get_artist_track_scores(artist_name, deezer_id=music_id)
 
     # Get never-prune tracks for this album

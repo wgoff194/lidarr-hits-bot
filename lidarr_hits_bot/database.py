@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from config import Config
+from lidarr_hits_bot.config import Config
 
 
 def _connect() -> sqlite3.Connection:

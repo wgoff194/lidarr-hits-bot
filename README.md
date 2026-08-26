@@ -259,17 +259,31 @@ An album gets added if **either**:
 
 ```
 lidarr-hits-bot/
-├── bot.py              # Discord bot + commands
-├── checker.py          # Daily popularity check logic
-├── config.py           # Environment variable config
-├── database.py         # SQLite watchlist storage
-├── lidarr_client.py    # Lidarr API client
-├── music_client.py     # Deezer API client (free, no auth)
-├── requirements.txt    # Python dependencies
-├── Dockerfile          # Container build
-├── docker-compose.yml  # Easy deployment
-├── .env.example        # Config template
-└── README.md           # This file
+├── run.py                          # Entry point
+├── lidarr_hits_bot/
+│   ├── __init__.py
+│   ├── main.py                     # Discord bot + commands + UI views
+│   ├── config.py                   # Environment variable config
+│   ├── database.py                 # SQLite: artists, settings, tracks, never-prune
+│   ├── checker.py                  # Daily check, prune, download status logic
+│   ├── clients/
+│   │   ├── __init__.py
+│   │   ├── deezer.py               # Deezer API (artist lookup, albums, tracks)
+│   │   ├── lastfm.py               # Last.fm API (play counts, popularity)
+│   │   └── lidarr.py               # Lidarr REST API (artists, albums, tracks, files)
+│   ├── ui/
+│   │   └── __init__.py
+│   └── utils/
+│       ├── __init__.py
+│       └── popularity.py           # Unified scorer (Last.fm + Deezer)
+├── Dockerfile
+├── docker-compose.yml
+├── pyproject.toml
+├── requirements.txt
+├── .env.example
+├── .gitignore
+├── .dockerignore
+└── README.md
 ```
 
 ## Troubleshooting

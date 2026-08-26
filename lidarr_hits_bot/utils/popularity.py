@@ -1,7 +1,7 @@
 """Unified popularity scorer — Last.fm primary, Deezer fallback."""
 
 import logging
-from config import Config
+from lidarr_hits_bot.config import Config
 
 log = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ def get_artist_track_scores(artist_name: str, deezer_id: str = None) -> dict[str
     # ── Last.fm (primary) ────────────────────────────────────────────────
     if Config.LASTFM_API_KEY:
         try:
-            from lastfm_client import LastfmClient
+            from lidarr_hits_bot.clients.lastfm import LastfmClient
             lfm = LastfmClient()
             lfm_scores = lfm.get_artist_top_tracks_scored(artist_name, limit=50)
             if lfm_scores:
@@ -30,7 +30,7 @@ def get_artist_track_scores(artist_name: str, deezer_id: str = None) -> dict[str
     # ── Deezer (fallback / supplement) ───────────────────────────────────
     if deezer_id:
         try:
-            from music_client import MusicClient
+            from lidarr_hits_bot.clients.deezer import MusicClient
             music = MusicClient()
             top_tracks = music.get_artist_top_tracks(deezer_id)
 

@@ -21,10 +21,10 @@ import discord
 from discord.ext import commands, tasks
 from croniter import croniter
 
-import database as db
-from checker import format_results, format_prune_results, format_download_check_results, run_daily_check, prune_downloaded_albums, check_downloads
-from config import Config
-from music_client import MusicClient
+from lidarr_hits_bot import database as db
+from lidarr_hits_bot.checker import format_results, format_prune_results, format_download_check_results, run_daily_check, prune_downloaded_albums, check_downloads
+from lidarr_hits_bot.config import Config
+from lidarr_hits_bot.clients.deezer import MusicClient
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 
@@ -710,7 +710,7 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
     metadata_profiles = []
     lidarr = None
     try:
-        from lidarr_client import LidarrClient
+        from lidarr_hits_bot.clients.lidarr import LidarrClient
         lidarr = LidarrClient()
         folders = lidarr.get_root_folders()
         metadata_profiles = lidarr.get_metadata_profiles()
@@ -880,7 +880,7 @@ async def update_cmd(ctx: commands.Context, *, artist_name: str = None):
     metadata_profiles = []
     lidarr = None
     try:
-        from lidarr_client import LidarrClient
+        from lidarr_hits_bot.clients.lidarr import LidarrClient
         lidarr = LidarrClient()
         folders = lidarr.get_root_folders()
         metadata_profiles = lidarr.get_metadata_profiles()
@@ -1502,7 +1502,7 @@ def _run_import() -> dict:
     result = {"added": [], "skipped": [], "errors": []}
 
     try:
-        from lidarr_client import LidarrClient
+        from lidarr_hits_bot.clients.lidarr import LidarrClient
         lidarr = LidarrClient()
     except Exception as e:
         result["errors"].append(f"Lidarr connection failed: {e}")
@@ -1616,7 +1616,7 @@ async def mode_cmd(ctx: commands.Context, mode: str = None):
 async def folder_cmd(ctx: commands.Context, *, folder_name: str = None):
     """Show available root folders or set the default. Per-artist: ?folder set <artist> to <folder>"""
     try:
-        from lidarr_client import LidarrClient
+        from lidarr_hits_bot.clients.lidarr import LidarrClient
         lidarr = LidarrClient()
         folders = lidarr.get_root_folders()
     except Exception as e:
@@ -2094,7 +2094,7 @@ async def keep_cmd(ctx: commands.Context):
 
     # Step 2: Pick album
     try:
-        from lidarr_client import LidarrClient
+        from lidarr_hits_bot.clients.lidarr import LidarrClient
         lidarr = LidarrClient()
         albums = lidarr.get_artist_albums(lidarr_id)
     except Exception as e:
