@@ -19,7 +19,6 @@ class LidarrClient:
         self.base = Config.LIDARR_URL.rstrip("/")
         self.headers = {"X-Api-Key": Config.LIDARR_API_KEY}
         self._quality_profile_id: Optional[int] = None
-        self._root_folder: Optional[str] = None
 
     def _get(self, path: str, params: dict | None = None) -> dict | list:
         url = f"{self.base}/api/v1{path}"
@@ -61,17 +60,70 @@ class LidarrClient:
             return profiles[0]["id"]
         raise RuntimeError("No Lidarr quality profiles found")
 
-    def get_root_folder(self) -> str:
-        """Get root folder path (cached)."""
-        if self._root_folder is not None:
-            return self._root_folder
-        folders = self._get("/rootfolder")
+    # ── Root folders ─────────────────────────────────────────────────────────
+
+    def get_root_folders(self) -> list[dict]:
+        """
+        Get all root folders from Lidarr (always fresh from API).
+        Returns list of dicts with:
+        - path: full filesystem path (e.g. "/music/Warren's Music")
+        - name: derived from the last path component (e.g. "Warren's Music")
+        """
+        raw = self._get("/rootfolder")
+        folders = []
+        for f in raw:
+            path = f["path"].rstrip("/")
+            # Derive a friendly name from the last path component
+            name = path.split("/")[-1] if "/" in path else path
+            folders.append({
+                "path": f["path"],
+                "name": name,
+                "id": f.get("id"),
+            })
+        return folders
+
+    def resolve_root_folder(self, name_or_path: str) -> Optional[str]:
+        """
+        Resolve a folder name (case-insensitive) to its full path.
+        Accepts either the friendly name ("Warren's Music") or a full path.
+        Returns the full path, or None if not found.
+        """
+        folders = self.get_root_folders()
+        search = name_or_path.strip().lower()
+
+        # Try exact path match first
+        for f in folders:
+            if f["path"].rstrip("/").lower() == search:
+                return f["path"]
+
+        # Try name match (last path component)
+        for f in folders:
+            if f["name"].lower() == search:
+                return f["path"]
+
+        # Try partial match
+        for f in folders:
+            if search in f["name"].lower():
+                return f["path"]
+
+        return None
+
+    def get_root_folder(self, folder_path: Optional[str] = None) -> str:
+        """
+        Get a root folder path. If folder_path is provided, validate it exists.
+        Otherwise fall back to the .env default.
+        """
+        if folder_path:
+            resolved = self.resolve_root_folder(folder_path)
+            if resolved:
+                return resolved
+            log.warning("Root folder '%s' not found, falling back to default", folder_path)
+
+        folders = self.get_root_folders()
         for f in folders:
             if f["path"] == Config.LIDARR_ROOT_FOLDER:
-                self._root_folder = f["path"]
                 return f["path"]
         if folders:
-            self._root_folder = folders[0]["path"]
             log.warning(
                 "Root folder '%s' not found, using '%s'",
                 Config.LIDARR_ROOT_FOLDER,
@@ -109,10 +161,10 @@ class LidarrClient:
 
     # ── Add artist ───────────────────────────────────────────────────────────
 
-    def add_artist(self, foreign_artist_id: str) -> Optional[dict]:
+    def add_artist(self, foreign_artist_id: str, root_folder: Optional[str] = None) -> Optional[dict]:
         """
         Add an artist to Lidarr by their MusicBrainz/foreign ID.
-        Lidarr will start monitoring based on its own settings.
+        root_folder: full path or friendly name (e.g. "Warren's Music").
         Returns the added artist dict, or None if already present.
         """
         # First, lookup the full artist info
@@ -135,7 +187,7 @@ class LidarrClient:
 
         # Build the add payload
         artist_data["qualityProfileId"] = self.get_quality_profile_id()
-        artist_data["rootFolderPath"] = self.get_root_folder()
+        artist_data["rootFolderPath"] = self.get_root_folder(root_folder)
         artist_data["monitored"] = True
         artist_data["addOptions"] = {
             "searchForMissingAlbums": False,  # Don't auto-grab everything!
@@ -160,7 +212,7 @@ class LidarrClient:
         try:
             album = self._get(f"/album/{album_id}")
             album["monitored"] = True
-            self._post(f"/album/{album_id}", album)  # PUT would be more correct but POST works
+            self._put(f"/album/{album_id}", album)
             return True
         except requests.HTTPError as e:
             log.error("Failed to monitor album %s: %s", album_id, e)
@@ -230,13 +282,3 @@ class LidarrClient:
                 stats["errors"] += 1
 
         return stats
-
-    def search_album(self, album_id: int) -> bool:
-        """Trigger Lidarr to search for and download a specific album."""
-        try:
-            self._post("/command", {"name": "AlbumSearch", "albumIds": [album_id]})
-            log.info("Triggered Lidarr search for album ID %s", album_id)
-            return True
-        except requests.HTTPError as e:
-            log.error("Failed to trigger search for album %s: %s", album_id, e)
-            return False

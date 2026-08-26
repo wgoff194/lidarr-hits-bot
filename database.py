@@ -26,6 +26,7 @@ def init_db() -> None:
             name            TEXT    NOT NULL,
             spotify_id      TEXT,
             lidarr_id       INTEGER,
+            root_folder     TEXT,
             added_by        TEXT    NOT NULL,
             added_at        TEXT    NOT NULL DEFAULT (datetime('now')),
             last_checked    TEXT,
@@ -101,13 +102,14 @@ def load_settings() -> None:
 
 # ── Artist CRUD ──────────────────────────────────────────────────────────────
 
-def add_artist(name: str, added_by: str, spotify_id: Optional[str] = None) -> bool:
+def add_artist(name: str, added_by: str, spotify_id: Optional[str] = None,
+               root_folder: Optional[str] = None) -> bool:
     """Add an artist to the watchlist. Returns False if already exists."""
     conn = _connect()
     try:
         conn.execute(
-            "INSERT INTO artists (name, spotify_id, added_by) VALUES (?, ?, ?)",
-            (name.strip(), spotify_id, added_by),
+            "INSERT INTO artists (name, spotify_id, added_by, root_folder) VALUES (?, ?, ?, ?)",
+            (name.strip(), spotify_id, added_by, root_folder),
         )
         conn.commit()
         return True
@@ -115,6 +117,27 @@ def add_artist(name: str, added_by: str, spotify_id: Optional[str] = None) -> bo
         return False
     finally:
         conn.close()
+
+
+def get_artist_root_folder(name: str) -> Optional[str]:
+    """Get the per-artist root folder override, or None for default."""
+    conn = _connect()
+    row = conn.execute(
+        "SELECT root_folder FROM artists WHERE name = ? COLLATE NOCASE", (name.strip(),)
+    ).fetchone()
+    conn.close()
+    return row["root_folder"] if row else None
+
+
+def set_artist_root_folder(name: str, root_folder: Optional[str]) -> None:
+    """Set or clear the per-artist root folder."""
+    conn = _connect()
+    conn.execute(
+        "UPDATE artists SET root_folder = ? WHERE name = ? COLLATE NOCASE",
+        (root_folder, name.strip()),
+    )
+    conn.commit()
+    conn.close()
 
 
 def remove_artist(name: str) -> bool:

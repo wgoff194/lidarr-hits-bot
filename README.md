@@ -74,13 +74,30 @@ docker run -d --name lidarr-hits-bot --env-file .env -v bot-data:/data lidarr-hi
 
 | Command | Description |
 |---|---|
-| `?add <artist>` | Track an artist (validates on Spotify first) |
+| `?add <artist>` | Add artist — opens interactive setup dialog |
 | `?remove <artist>` | Stop tracking an artist |
-| `?list` | Show all tracked artists |
+| `?list` | Show all tracked artists (with folder info) |
 | `?check` | Manually trigger a popularity check |
 | `?threshold <0-100>` | View or set the popularity threshold |
 | `?mode <tracks\|album>` | Switch between tracks-only or whole-album mode |
+| `?folder` | Show all Lidarr root folders + current default |
+| `?folder <name>` | Set the default root folder |
+| `?folder set <artist> to <folder>` | Change an existing artist's folder |
 | `?help` | Show help |
+
+## Adding Artists (Interactive Dialog)
+
+When you run `?add Linkin Park`, the bot:
+
+1. Validates the artist on Spotify (shows genres, popularity)
+2. Presents an interactive dialog with:
+   - **📁 Root Folder** dropdown (pre-selected to your default)
+   - **🎛️ Mode** dropdown (tracks only / full album)
+   - **📊 Edit Threshold** button (opens a popup to change the value)
+   - **✅ Add Artist** / **❌ Cancel** buttons
+3. You configure everything, hit Add, done
+
+The dialog times out after 5 minutes. Only the person who ran `?add` can confirm/cancel.
 
 ## Download Modes
 
@@ -90,6 +107,23 @@ docker run -d --name lidarr-hits-bot --env-file .env -v bot-data:/data lidarr-hi
 | `album` | Downloads the entire album if it has popular tracks. |
 
 Switch anytime with `?mode tracks` or `?mode album`. Set permanently via `DOWNLOAD_MODE` in `.env`.
+
+## Root Folders
+
+The bot auto-discovers your Lidarr root folders — no need to type paths. Just use the folder name:
+
+```
+?folder                          → shows all folders + current default
+?folder Warren's Music           → sets default folder
+?add Linkin Park to Soundtracks  → per-artist folder override
+?folder set Linkin Park to Shared → change an existing artist's folder
+```
+
+**Folder priority** (when adding an artist to Lidarr):
+1. Per-artist folder (set via `?add ... to <folder>` or `?folder set ...`)
+2. Default folder (set via `?folder <name>`)
+3. `LIDARR_ROOT_FOLDER` env var (fallback)
+4. First folder Lidarr returns (last resort)
 
 ## Popularity Threshold
 

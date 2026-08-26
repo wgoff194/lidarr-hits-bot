@@ -95,7 +95,14 @@ def run_daily_check() -> list[CheckResult]:
                     if existing:
                         lidarr_artist_id = existing["id"]
                     else:
-                        added = lidarr.add_artist(lidarr_artist.get("foreignArtistId", artist["name"]))
+                        # Determine root folder: per-artist override > default setting > .env
+                        root_folder = artist.get("root_folder")
+                        if not root_folder:
+                            root_folder = db.get_setting("default_root_folder")
+                        added = lidarr.add_artist(
+                            lidarr_artist.get("foreignArtistId", artist["name"]),
+                            root_folder=root_folder,
+                        )
                         if added:
                             lidarr_artist_id = added["id"]
                         else:
