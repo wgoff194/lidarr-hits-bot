@@ -89,7 +89,7 @@ async def get_thread_channel(ctx: commands.Context) -> discord.abc.Messageable:
     try:
         thread = await ctx.message.create_thread(
             name=thread_name[:100],  # Discord limit
-            auto_archive_duration=43200,  # 30 days (requires server boost level 2, falls back to max available)
+            auto_archive_duration=10080,  # 7 days (max for non-boosted servers)
         )
         return thread
     except discord.HTTPException:
@@ -108,7 +108,7 @@ async def auto_thread(ctx: commands.Context):
         thread_name = ctx.command.name
         thread = await ctx.message.create_thread(
             name=thread_name[:100],
-            auto_archive_duration=43200,
+            auto_archive_duration=10080,
         )
         ctx._thread_channel = thread
         log.info("Created thread '%s' for command '%s'", thread_name, ctx.command.name)
@@ -2276,7 +2276,7 @@ async def daily_check_loop():
             try:
                 thread = await channel.create_thread(
                     name=thread_name,
-                    auto_archive_duration=43200,  # 30 days
+                    auto_archive_duration=10080,  # 7 days
                 )
                 report_channel = thread
                 log.info("Created daily report thread: %s", thread_name)
