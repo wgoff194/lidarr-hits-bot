@@ -202,7 +202,8 @@ class LidarrClient:
         artist_data["rootFolderPath"] = self.get_root_folder(root_folder)
         artist_data["monitored"] = True
         artist_data["addOptions"] = {
-            "searchForMissingAlbums": False,  # Don't auto-grab everything!
+            "searchForMissingAlbums": False,
+            "monitor": "none",  # Don't monitor any albums — we'll pick them ourselves
         }
 
         # Remove fields Lidarr doesn't accept on POST
