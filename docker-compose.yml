@@ -1,0 +1,18 @@
+services:
+  lidarr-hits-bot:
+    build: .
+    container_name: lidarr-hits-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Persist the SQLite database
+      - bot-data:/data
+    # If Lidarr is also in Docker, use the Docker network name:
+    #   LIDARR_URL=http://lidarr:8686
+    # If Lidarr is on the host:
+    #   LIDARR_URL=http://host.docker.internal:8686
+    # Or use the host IP directly.
+
+volumes:
+  bot-data:
