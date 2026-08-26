@@ -172,13 +172,6 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
                 album_id = matched["id"]
 
                 # ── Album-level: monitor and search ─────────────────────
-                # Check if we already processed this album
-                already_monitored = db.get_monitored_tracks(artist["id"], album.name)
-                if already_monitored:
-                    result.albums_skipped += 1
-                    result.skipped_albums.append(f"{album.name} (already processed)")
-                    continue
-
                 success = lidarr.monitor_and_search_album(album_id)
                 db.log_check(artist["id"], album.name, album.deezer_url, album.avg_popularity, success)
                 if success:
@@ -186,7 +179,7 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
                     result.added_albums.append(
                         f"{album.name} (pop: {album.avg_popularity}, type: {album.album_type})"
                     )
-                    # Record so we don't re-add
+                    # Record for prune tracking
                     db.record_monitored_tracks(artist["id"], album.name, [
                         {"name": tp.name, "popularity": tp.popularity}
                         for tp in album.track_popularities
