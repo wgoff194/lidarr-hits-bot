@@ -50,7 +50,7 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
     log.info("Starting daily check for %d artists (mode: %s)...", len(artists), Config.DOWNLOAD_MODE)
 
     try:
-        spotify = MusicClient()
+        music = MusicClient()
     except ValueError as e:
         log.error("Music client init failed: %s", e)
         return []
@@ -68,29 +68,29 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
         log.info("Checking artist: %s", artist["name"])
 
         # ── Step 1: Resolve Spotify ID if we don't have it ───────────────
-        spotify_id = artist.get("spotify_id")
-        if not spotify_id:
-            found = spotify.search_artist(artist["name"])
+        music_id = artist.get("spotify_id")
+        if not music_id:
+            found = music.search_artist(artist["name"])
             if not found:
                 result.errors.append("Not found on Spotify")
                 results.append(result)
                 continue
-            spotify_id = found["id"]
-            db.update_artist_spotify_id(artist["name"], spotify_id)
+            music_id = found["id"]
+            db.update_artist_spotify_id(artist["name"], music_id)
 
         # ── Step 2: Get releases ──────────────────────────────────────────
         try:
             if full_scan:
-                new_albums = spotify.get_artist_top_albums(spotify_id)
+                new_albums = music.get_artist_top_albums(music_id)
             else:
-                new_albums = spotify.get_new_releases(spotify_id, lookback_days=90)
+                new_albums = music.get_new_releases(music_id, lookback_days=90)
         except Exception as e:
             result.errors.append(f"Music API error: {e}")
             results.append(result)
             continue
 
         # ── Step 3: Filter for popularity ────────────────────────────────
-        popular_albums = [a for a in new_albums if spotify.should_download_album(a)]
+        popular_albums = [a for a in new_albums if music.should_download_album(a)]
         result.new_albums_found = len(popular_albums)
 
         for album in popular_albums:
@@ -119,7 +119,7 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
                             lidarr_artist_id = added["id"]
                         else:
                             result.errors.append("Could not add artist to Lidarr")
-                            db.log_check(artist["id"], album.name, album.spotify_url, album.avg_popularity, False)
+                            db.log_check(artist["id"], album.name, album.deezer_url, album.avg_popularity, False)
                             continue
                     db.update_artist_lidarr_id(artist["name"], lidarr_artist_id)
 
@@ -129,7 +129,7 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
                 matched = _match_album(album.name, lidarr_albums)
 
                 if not matched:
-                    db.log_check(artist["id"], album.name, album.spotify_url, album.avg_popularity, False)
+                    db.log_check(artist["id"], album.name, album.deezer_url, album.avg_popularity, False)
                     result.skipped_albums.append(f"{album.name} (not in Lidarr DB yet)")
                     continue
 
@@ -140,7 +140,7 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
                     success, track_stats = _download_popular_tracks(
                         lidarr, album_id, album, artist["id"]
                     )
-                    db.log_check(artist["id"], album.name, album.spotify_url, album.avg_popularity, success)
+                    db.log_check(artist["id"], album.name, album.deezer_url, album.avg_popularity, success)
                     if success:
                         if track_stats["new"] > 0:
                             result.albums_added += 1
@@ -168,7 +168,7 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
                         continue
 
                     success = lidarr.monitor_and_search_album(album_id)
-                    db.log_check(artist["id"], album.name, album.spotify_url, album.avg_popularity, success)
+                    db.log_check(artist["id"], album.name, album.deezer_url, album.avg_popularity, success)
                     if success:
                         result.albums_added += 1
                         result.added_albums.append(
@@ -184,7 +184,7 @@ def run_daily_check(artist_filter: str = None, full_scan: bool = False) -> list[
 
             except Exception as e:
                 result.errors.append(f"Lidarr error for {album.name}: {e}")
-                db.log_check(artist["id"], album.name, album.spotify_url, album.avg_popularity, False)
+                db.log_check(artist["id"], album.name, album.deezer_url, album.avg_popularity, False)
 
         db.mark_checked(artist["id"])
         results.append(result)
@@ -304,19 +304,19 @@ def _download_popular_tracks(
     return True, {"new": len(new_track_ids), "already": already_count, "unmonitored": stats["unmonitored"]}
 
 
-def _match_album(spotify_name: str, lidarr_albums: list[dict]) -> dict | None:
+def _match_album(album_name: str, lidarr_albums: list[dict]) -> dict | None:
     """Try to match a Spotify album name to a Lidarr album."""
-    spotify_lower = spotify_name.strip().lower()
+    album_lower = album_name.strip().lower()
 
     # Exact match first
     for la in lidarr_albums:
-        if la.get("title", "").strip().lower() == spotify_lower:
+        if la.get("title", "").strip().lower() == album_lower:
             return la
 
     # Contains match
     for la in lidarr_albums:
         lidarr_lower = la.get("title", "").strip().lower()
-        if spotify_lower in lidarr_lower or lidarr_lower in spotify_lower:
+        if album_lower in lidarr_lower or lidarr_lower in album_lower:
             return la
 
     return None

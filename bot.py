@@ -129,15 +129,15 @@ class AddArtistView(discord.ui.View):
         self,
         author_id: int,
         display_name: str,
-        spotify_id: Optional[str],
-        spotify_data: Optional[dict],
+        music_id: Optional[str],
+        artist_data: Optional[dict],
         folders: list[dict],
     ):
         super().__init__(timeout=300)  # 5 minute timeout
         self.author_id = author_id
         self.display_name = display_name
-        self.spotify_id = spotify_id
-        self.spotify_data = spotify_data
+        self.music_id = music_id
+        self.artist_data = artist_data
         self.folders = folders
         self.threshold = Config.POPULARITY_THRESHOLD
         self.selected_mode = Config.DOWNLOAD_MODE
@@ -331,15 +331,15 @@ class AddArtistView(discord.ui.View):
             )
 
         # Artist info
-        if self.spotify_data:
-            genres = self.spotify_data.get("genres", [])
+        if self.artist_data:
+            genres = self.artist_data.get("genres", [])
             if genres:
                 embed.add_field(
                     name="Genres",
                     value=", ".join(genres[:3]),
                     inline=True,
                 )
-            nb_fan = self.spotify_data.get("nb_fan")
+            nb_fan = self.artist_data.get("nb_fan")
             if nb_fan:
                 if nb_fan >= 1_000_000:
                     fan_str = f"{nb_fan / 1_000_000:.1f}M"
@@ -420,9 +420,9 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
 
     artist_name = artist_name.strip()
 
-    # Validate on Spotify
-    spotify_data = None
-    spotify_id = None
+    # Validate on Deezer
+    artist_data = None
+    music_id = None
     display_name = artist_name
     try:
         sp = MusicClient()
@@ -430,9 +430,9 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
         if not found:
             await ctx.send(f"❌ Couldn't find **{artist_name}** on Deezer. Check the spelling?")
             return
-        spotify_id = found["id"]
+        music_id = found["id"]
         display_name = found["name"]
-        spotify_data = found  # Contains genres, popularity, images, etc.
+        artist_data = found  # Contains genres, popularity, images, etc.
     except Exception as e:
         log.warning("Music lookup failed for '%s': %s", artist_name, e)
 
@@ -455,8 +455,8 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
     view = AddArtistView(
         author_id=ctx.author.id,
         display_name=display_name,
-        spotify_id=spotify_id,
-        spotify_data=spotify_data,
+        music_id=music_id,
+        artist_data=artist_data,
         folders=folders,
     )
 
@@ -471,7 +471,7 @@ async def add_artist(ctx: commands.Context, *, artist_name: str = None):
     # ── User confirmed — save to database ────────────────────────────────
     added_by = str(ctx.author)
     success = db.add_artist(
-        display_name, added_by, spotify_id,
+        display_name, added_by, music_id,
         root_folder=view.selected_folder,
     )
 
