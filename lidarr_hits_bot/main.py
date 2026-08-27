@@ -1975,9 +1975,8 @@ class KeepArtistView(discord.ui.View):
             if str(a["id"]) == select.values[0]:
                 self.selected_artist = a
                 break
-        self.stop()
-        for item in self.children:
-            item.disabled = True
+        for opt in select.options:
+            opt.default = opt.value == select.values[0]
         await interaction.response.edit_message(view=self)
 
     @discord.ui.button(label="🔍 Search", style=discord.ButtonStyle.secondary, row=1)
@@ -1987,6 +1986,19 @@ class KeepArtistView(discord.ui.View):
             return
         modal = SearchModal(self, self.artist_select, self.artists)
         await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="✅ Confirm", style=discord.ButtonStyle.success, row=1)
+    async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        if not self.selected_artist:
+            await interaction.response.send_message("❌ Pick an artist first.", ephemeral=True)
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
 
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=1)
     async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2028,9 +2040,8 @@ class KeepAlbumView(discord.ui.View):
             if str(a["id"]) == select.values[0]:
                 self.selected_album = a
                 break
-        self.stop()
-        for item in self.children:
-            item.disabled = True
+        for opt in select.options:
+            opt.default = opt.value == select.values[0]
         await interaction.response.edit_message(view=self)
 
     @discord.ui.button(label="🔍 Search", style=discord.ButtonStyle.secondary, row=1)
@@ -2038,10 +2049,22 @@ class KeepAlbumView(discord.ui.View):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("❌ Not yours.", ephemeral=True)
             return
-        # Albums need a different search — use title as the "name" field
         album_dicts = [{"name": a.get("title", "Unknown"), "id": str(a["id"])} for a in self.albums]
         modal = SearchModal(self, self.album_select, album_dicts)
         await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="✅ Confirm", style=discord.ButtonStyle.success, row=1)
+    async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        if not self.selected_album:
+            await interaction.response.send_message("❌ Pick an album first.", ephemeral=True)
+            return
+        self.stop()
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
 
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=1)
     async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
