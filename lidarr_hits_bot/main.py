@@ -1971,12 +1971,29 @@ class KeepArtistView(discord.ui.View):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("❌ Not yours.", ephemeral=True)
             return
+        selected_value = select.values[0]
+        # Try to find by ID first
         for a in self.artists:
-            if str(a["id"]) == select.values[0]:
+            if str(a["id"]) == selected_value:
                 self.selected_artist = a
                 break
+        # Fallback: find by matching the selected option's label
+        if not self.selected_artist:
+            for opt in select.options:
+                if opt.value == selected_value:
+                    for a in self.artists:
+                        if a["name"] == opt.label:
+                            self.selected_artist = a
+                            break
+                    break
+        # Last resort: create a minimal dict from the option
+        if not self.selected_artist:
+            for opt in select.options:
+                if opt.value == selected_value:
+                    self.selected_artist = {"id": int(selected_value), "name": opt.label}
+                    break
         for opt in select.options:
-            opt.default = opt.value == select.values[0]
+            opt.default = opt.value == selected_value
         await interaction.response.edit_message(view=self)
 
     @discord.ui.button(label="🔍 Search", style=discord.ButtonStyle.secondary, row=1)
@@ -1992,6 +2009,17 @@ class KeepArtistView(discord.ui.View):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("❌ Not yours.", ephemeral=True)
             return
+        # Fallback: if selected_artist not set, try to read from dropdown
+        if not self.selected_artist:
+            for opt in self.artist_select.options:
+                if opt.default:
+                    for a in self.artists:
+                        if a["name"] == opt.label or str(a["id"]) == opt.value:
+                            self.selected_artist = a
+                            break
+                    if not self.selected_artist:
+                        self.selected_artist = {"id": int(opt.value), "name": opt.label}
+                    break
         if not self.selected_artist:
             await interaction.response.send_message("❌ Pick an artist first.", ephemeral=True)
             return
@@ -2036,12 +2064,29 @@ class KeepAlbumView(discord.ui.View):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("❌ Not yours.", ephemeral=True)
             return
+        selected_value = select.values[0]
+        # Try to find by ID first
         for a in self.albums:
-            if str(a["id"]) == select.values[0]:
+            if str(a["id"]) == selected_value:
                 self.selected_album = a
                 break
+        # Fallback: find by matching the selected option's label
+        if not self.selected_album:
+            for opt in select.options:
+                if opt.value == selected_value:
+                    for a in self.albums:
+                        if a.get("title") == opt.label:
+                            self.selected_album = a
+                            break
+                    break
+        # Last resort: create a minimal dict
+        if not self.selected_album:
+            for opt in select.options:
+                if opt.value == selected_value:
+                    self.selected_album = {"id": int(selected_value), "title": opt.label}
+                    break
         for opt in select.options:
-            opt.default = opt.value == select.values[0]
+            opt.default = opt.value == selected_value
         await interaction.response.edit_message(view=self)
 
     @discord.ui.button(label="🔍 Search", style=discord.ButtonStyle.secondary, row=1)
@@ -2058,6 +2103,17 @@ class KeepAlbumView(discord.ui.View):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("❌ Not yours.", ephemeral=True)
             return
+        # Fallback: if selected_album not set, try to read from dropdown
+        if not self.selected_album:
+            for opt in self.album_select.options:
+                if opt.default:
+                    for a in self.albums:
+                        if a.get("title") == opt.label or str(a["id"]) == opt.value:
+                            self.selected_album = a
+                            break
+                    if not self.selected_album:
+                        self.selected_album = {"id": int(opt.value), "title": opt.label}
+                    break
         if not self.selected_album:
             await interaction.response.send_message("❌ Pick an album first.", ephemeral=True)
             return
