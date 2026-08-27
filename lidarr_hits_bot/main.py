@@ -1963,11 +1963,25 @@ class KeepArtistView(discord.ui.View):
         self.author_id = author_id
         self.artists = artists
         self.selected_artist: Optional[dict] = None
-
+        
+        # Build dropdown options
         options = []
-        for a in artists[:25]:
-            options.append(_opt(a["name"], a["id"]))
+        for a in artists[:25]:  # Discord max 25 options
+            name = a.get("name") or "Unknown"
+            label = str(name)[:25] if name else "Unknown"
+            # Ensure label is never empty
+            if not label.strip():
+                label = "Unknown"
+            options.append(_opt(label, str(a.get("id", ""))))
         self.artist_select.options = options
+        
+        # Auto-select if only 1 artist provided
+        if len(artists) == 1:
+            self.selected_artist = artists[0]
+            self.artist_select.disabled = True
+            self.artist_select.placeholder = f"Only artist: {artists[0].get('name', 'Unknown')}"
+        else:
+            self.artist_select.placeholder = "Pick an artist..."
 
     @discord.ui.select(placeholder="Pick an artist...", min_values=1, max_values=1, row=0)
     async def artist_select(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -2055,12 +2069,27 @@ class KeepAlbumView(discord.ui.View):
         self.author_id = author_id
         self.albums = albums
         self.selected_album: Optional[dict] = None
-
+        
+        # Build dropdown options
         options = []
-        for a in albums[:25]:
-            title = a.get("title", "Unknown")
-            options.append(_opt(title, a["id"]))
+        for a in albums[:25]:  # Discord max 25 options
+            title = (a.get("title") or "Unknown Album").strip()
+            if not title:
+                title = "Unknown Album"
+            label = str(title)[:25] if title else "Unknown Album"
+            # Ensure label is never empty
+            if not label.strip():
+                label = "Unknown Album"
+            options.append(_opt(label, str(a.get("id", ""))))
         self.album_select.options = options
+        
+        # Auto-select if only 1 album provided
+        if len(albums) == 1:
+            self.selected_album = albums[0]
+            self.album_select.disabled = True
+            self.album_select.placeholder = f"Only album: {albums[0].get('title', 'Unknown')}"
+        else:
+            self.album_select.placeholder = "Pick an album..."
 
     @discord.ui.select(placeholder="Pick an album...", min_values=1, max_values=1, row=0)
     async def album_select(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -2226,33 +2255,68 @@ class KeepTrackView(discord.ui.View):
 
 
 @bot.command(name="keep")
-async def keep_cmd(ctx: commands.Context):
-    """Mark tracks as never-prune. Nested menu: artist → album → tracks."""
+async def keep_cmd(ctx: commands.Context, artist_name: str = None):
+    """Mark tracks as never-prune. Nested menu: artist → album → tracks.
+    
+    Usage:
+    ?keep                          # Interactive menu
+    ?keep Linkin Park              # Auto-select Linkin Park artist
+    """
     artists = db.list_artists()
     if not artists:
         await ctx.send("📭 Watchlist is empty.")
         return
-
-    # Step 1: Pick artist
-    artist_view = KeepArtistView(ctx.author.id, artists)
-    await ctx.send(embed=discord.Embed(
-        title="🔒 Never Prune — Step 1: Pick Artist",
-        description="Select an artist to protect tracks from pruning.",
-        color=0x1DB954,
-    ), view=artist_view)
-    await artist_view.wait()
-
-    if not artist_view.selected_artist:
-        return
-
-    artist = artist_view.selected_artist
+    
+    # If artist name provided, try to find and auto-select it
+    selected_artist = None
+    if artist_name:
+        # Fuzzy match against artist names
+        import re
+        query = artist_name.lower().strip()
+        matched = None
+        for a in artists:
+            a_name = (a.get("name") or "").lower()
+            # Exact match first
+            if query == a_name:
+                matched = a
+                break
+            # Substring match
+            if query in a_name:
+                matched = a
+                break
+            # Fuzzy: first word match
+            if query and a_name.startswith(query):
+                matched = a
+                break
+        if matched:
+            selected_artist = matched
+            log = logging.getLogger(__name__)
+            log.info(f"keep_cmd: Auto-selected artist '{matched['name']}' from argument '{artist_name}'")
+        else:
+            await ctx.send(f"❌ Artist **{artist_name}** not found in watchlist.\nAvailable: {', '.join(a.get('name', 'Unknown') for a in artists[:5])}...")
+            return
+    else:
+        # Interactive mode - show the view
+        artist_view = KeepArtistView(ctx.author.id, artists)
+        await ctx.send(embed=discord.Embed(
+            title="🔒 Never Prune — Step 1: Pick Artist",
+            description="Select an artist to protect tracks from pruning.",
+            color=0x1DB954,
+        ), view=artist_view)
+        await artist_view.wait()
+        
+        if not artist_view.selected_artist:
+            return
+        selected_artist = artist_view.selected_artist
+    
+    artist = selected_artist
     lidarr_id = artist.get("lidarr_id")
-
+    
     if not lidarr_id:
         await ctx.send(f"❌ **{artist['name']}** not in Lidarr yet.")
         return
-
-    # Step 2: Pick album
+    
+    # Step 2: Pick album (even if interactive, we now auto-have the artist)
     try:
         from lidarr_hits_bot.clients.lidarr import LidarrClient
         lidarr = LidarrClient()
@@ -2261,20 +2325,58 @@ async def keep_cmd(ctx: commands.Context):
     except Exception as e:
         await ctx.send(f"❌ Lidarr error: {e}")
         return
-
+    
     if not albums:
         await ctx.send(f"❌ No albums found for **{artist['name']}** in Lidarr.")
         return
-
-    album_view = KeepAlbumView(ctx.author.id, albums)
+    
+    # Auto-select if only 1 album
+    if len(albums) == 1:
+        album_view = type('obj', (object,), {'selected_album': albums[0]})()
+        album = albums[0]
+        album_name = album.get("title", "Unknown")
+        log = logging.getLogger(__name__)
+        log.info(f"keep_cmd: Auto-selected 1 album: {album_name}")
+    else:
+        album_view = KeepAlbumView(ctx.author.id, albums)
+        await ctx.send(embed=discord.Embed(
+            title=f"🔒 Never Prune — Step 2: Pick Album ({artist['name']})",
+            description="Select an album to protect tracks from.",
+            color=0x1DB954,
+        ), view=album_view)
+        await album_view.wait()
+        
+        if not album_view.selected_album:
+            return
+        album = album_view.selected_album
+        album_name = album.get("title", "Unknown")
+    
+    # Step 3: Pick tracks
+    try:
+        from lidarr_hits_bot.clients.lidarr import LidarrClient
+        lidarr = LidarrClient()
+        tracks = await loop.run_in_executor(None, lidarr.get_album_tracks, album["id"])
+    except Exception:
+        tracks = []
+    
+    if not tracks:
+        await ctx.send(f"❌ No tracks found for **{album_name}**.")
+        return
+    
+    already_protected = db.get_never_prune_tracks(artist["id"], album_name)
+    track_view = KeepTrackView(ctx.author.id, tracks, already_protected)
     await ctx.send(embed=discord.Embed(
-        title=f"🔒 Never Prune — Step 2: Pick Album ({artist['name']})",
-        description="Select an album to protect tracks from.",
+        title=f"🔒 Never Prune — Step 3: Pick Tracks ({album_name})",
+        description=(
+            f"Select tracks to protect from pruning.\n"
+            f"🔒 = already protected\n\n"
+            f"**Mark All** = keep entire album"
+        ),
         color=0x1DB954,
-    ), view=album_view)
-    await album_view.wait()
-
-    if not album_view.selected_album:
+    ), view=track_view)
+    await track_view.wait()
+    
+    if not track_view.selected_track_ids:
         return
 
     album = album_view.selected_album
