@@ -1964,15 +1964,20 @@ class KeepArtistView(discord.ui.View):
         self.artists = artists
         self.selected_artist: Optional[dict] = None
         
-        # Build dropdown options
+        # Build dropdown options with logging
+        import logging
+        log = logging.getLogger(__name__)
         options = []
-        for a in artists[:25]:  # Discord max 25 options
+        for i, a in enumerate(artists[:25]):  # Discord max 25 options
             name = a.get("name") or "Unknown"
             label = str(name)[:25] if name else "Unknown"
             # Ensure label is never empty
             if not label.strip():
                 label = "Unknown"
             options.append(_opt(label, str(a.get("id", ""))))
+            if i < 3:  # Log first 3
+                log.info(f"KeepArtistView option {i}: label='{label}', value='{a.get('id', '')}'")
+        
         self.artist_select.options = options
         
         # Auto-select if only 1 artist provided
@@ -1980,8 +1985,10 @@ class KeepArtistView(discord.ui.View):
             self.selected_artist = artists[0]
             self.artist_select.disabled = True
             self.artist_select.placeholder = f"Only artist: {artists[0].get('name', 'Unknown')}"
+            log.info(f"KeepArtistView: Auto-selected 1 artist: {artists[0].get('name', 'Unknown')}")
         else:
             self.artist_select.placeholder = "Pick an artist..."
+            log.info(f"KeepArtistView: {len(artists)} artists, showing dropdown")
 
     @discord.ui.select(placeholder="Pick an artist...", min_values=1, max_values=1, row=0)
     async def artist_select(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -2070,9 +2077,11 @@ class KeepAlbumView(discord.ui.View):
         self.albums = albums
         self.selected_album: Optional[dict] = None
         
-        # Build dropdown options
+        # Build dropdown options with logging
+        import logging
+        log = logging.getLogger(__name__)
         options = []
-        for a in albums[:25]:  # Discord max 25 options
+        for i, a in enumerate(albums[:25]):  # Discord max 25 options
             title = (a.get("title") or "Unknown Album").strip()
             if not title:
                 title = "Unknown Album"
@@ -2081,6 +2090,9 @@ class KeepAlbumView(discord.ui.View):
             if not label.strip():
                 label = "Unknown Album"
             options.append(_opt(label, str(a.get("id", ""))))
+            if i < 3:  # Log first 3
+                log.info(f"KeepAlbumView option {i}: label='{label}', value='{a.get('id', '')}'")
+        
         self.album_select.options = options
         
         # Auto-select if only 1 album provided
@@ -2088,8 +2100,10 @@ class KeepAlbumView(discord.ui.View):
             self.selected_album = albums[0]
             self.album_select.disabled = True
             self.album_select.placeholder = f"Only album: {albums[0].get('title', 'Unknown')}"
+            log.info(f"KeepAlbumView: Auto-selected 1 album: {albums[0].get('title', 'Unknown')}")
         else:
             self.album_select.placeholder = "Pick an album..."
+            log.info(f"KeepAlbumView: {len(albums)} albums, showing dropdown")
 
     @discord.ui.select(placeholder="Pick an album...", min_values=1, max_values=1, row=0)
     async def album_select(self, interaction: discord.Interaction, select: discord.ui.Select):
