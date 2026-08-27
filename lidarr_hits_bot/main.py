@@ -126,6 +126,11 @@ async def auto_thread(ctx: commands.Context):
 # ── Interactive Add Artist UI ─────────────────────────────────────────────────
 
 
+def _opt(label: str, value: str, **kwargs) -> discord.SelectOption:
+    """Create a SelectOption with label truncated to 25 chars (Discord limit)."""
+    return discord.SelectOption(label=label[:25], value=str(value), **kwargs)
+
+
 def fuzzy_find_artist(artists: list[dict], query: str) -> Optional[dict]:
     """Fuzzy match an artist name. Returns best match or None."""
     query = query.strip().lower()
@@ -222,7 +227,7 @@ class SearchModal(discord.ui.Modal, title="Search Artists"):
         # Update the dropdown options
         options = []
         for a in matches[:25]:
-            options.append(discord.SelectOption(label=a["name"], value=a["name"]))
+            options.append(_opt(a["name"], a["name"]))
         self.select_component.options = options
 
         # Update placeholder to show filter
@@ -285,10 +290,7 @@ class AddArtistView(discord.ui.View):
             label = f["name"]
             is_default = default_folder and f["path"] == default_folder
             options.append(
-                discord.SelectOption(
-                    label=label,
-                    value=f["path"],
-                    description=f["path"],
+                _opt(label, f["path"], description=f["path"],
                     default=is_default,
                 )
             )
@@ -340,10 +342,7 @@ class AddArtistView(discord.ui.View):
         filtered = self._get_filtered_profiles()
         options = []
         for p in filtered:
-            options.append(discord.SelectOption(
-                label=p["name"],
-                value=str(p["id"]),
-            ))
+            options.append(_opt(p["name"], p["id"]))
 
         if not options:
             self.metadata_profile_select.disabled = True
@@ -639,10 +638,7 @@ class AddFuzzyPickerView(discord.ui.View):
                 desc = f"{fans / 1_000:.0f}K fans"
             else:
                 desc = f"{fans} fans"
-            options.append(discord.SelectOption(
-                label=r["name"],
-                value=r["id"],
-                description=desc,
+            options.append(_opt(r["name"], r["id"], description=desc,
             ))
         self.artist_select.options = options
 
@@ -866,7 +862,7 @@ class UpdatePickerView(discord.ui.View):
 
         options = []
         for a in artists:
-            options.append(discord.SelectOption(label=a["name"], value=a["name"]))
+            options.append(_opt(a["name"], a["name"]))
         self.artist_select.options = options[:25]
 
     @discord.ui.select(placeholder="Pick an artist to update...", min_values=1, max_values=1, row=0)
@@ -1217,7 +1213,7 @@ class ScanArtistView(discord.ui.View):
         # Build dropdown — individual artists only
         options = []
         for a in artists:
-            options.append(discord.SelectOption(label=a["name"], value=a["name"]))
+            options.append(_opt(a["name"], a["name"]))
         self.artist_select.options = options[:25]
 
     @discord.ui.select(placeholder="Pick an artist...", min_values=1, max_values=1, row=0)
@@ -1379,7 +1375,7 @@ class PruneArtistView(discord.ui.View):
 
         options = []
         for a in artists:
-            options.append(discord.SelectOption(label=a["name"], value=a["name"]))
+            options.append(_opt(a["name"], a["name"]))
         self.artist_select.options = options[:25]
 
     @discord.ui.select(placeholder="Pick an artist to prune...", min_values=1, max_values=1, row=0)
@@ -1963,7 +1959,7 @@ class KeepArtistView(discord.ui.View):
 
         options = []
         for a in artists[:25]:
-            options.append(discord.SelectOption(label=a["name"], value=str(a["id"])))
+            options.append(_opt(a["name"], a["id"]))
         self.artist_select.options = options
 
     @discord.ui.select(placeholder="Pick an artist...", min_values=1, max_values=1, row=0)
@@ -2056,7 +2052,7 @@ class KeepAlbumView(discord.ui.View):
         options = []
         for a in albums[:25]:
             title = a.get("title", "Unknown")
-            options.append(discord.SelectOption(label=title, value=str(a["id"])))
+            options.append(_opt(title, a["id"]))
         self.album_select.options = options
 
     @discord.ui.select(placeholder="Pick an album...", min_values=1, max_values=1, row=0)
@@ -2153,9 +2149,7 @@ class KeepTrackView(discord.ui.View):
         for t in tracks[:25]:
             title = t.get("title", "Unknown")
             protected = "🔒" if title.lower() in {p.lower() for p in already_protected} else ""
-            options.append(discord.SelectOption(
-                label=f"{protected} {title}".strip(),
-                value=str(t["id"]),
+            options.append(_opt(f"{protected} {title}".strip(), t["id"],
                 default=title.lower() in {p.lower() for p in already_protected},
             ))
         self.track_select.options = options
