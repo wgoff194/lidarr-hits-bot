@@ -394,18 +394,12 @@ class AddArtistView(discord.ui.View):
     @discord.ui.select(
         placeholder="🎛️ Download mode...",
         options=[
-            discord.SelectOption(
-                label="Tracks (prune below threshold)",
-                value="tracks",
-                description="Download album, delete below-threshold tracks",
-                emoji="🎵",
-            ),
-            discord.SelectOption(
-                label="Album (keep everything)",
-                value="album",
-                description="Download full album, keep all tracks",
-                emoji="💿",
-            ),
+            _opt("Tracks (prune below threshold)", "tracks",
+                 description="Download album, delete below-threshold tracks",
+                 emoji="🎵"),
+            _opt("Album (keep everything)", "album",
+                 description="Download full album, keep all tracks",
+                 emoji="💿"),
         ],
         min_values=1,
         max_values=1,
