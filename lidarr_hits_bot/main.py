@@ -2208,7 +2208,7 @@ class KeepTrackView(discord.ui.View):
         import logging
         log = logging.getLogger(__name__)
         log.info(f"KeepTrackView: Received {len(tracks)} tracks from album")
-        log.info(f"KeepTrackView: First 3 track titles: {[(t.get('title') or 'Unknown')[:30] for t in tracks[:3]]}")
+        log.info(f"KeepTrackView: Track titles: {[(t.get('title') or 'Unknown')[:30] for t in tracks]}")
         
         options = []
         for t in tracks[:25]:
