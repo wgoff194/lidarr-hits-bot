@@ -1962,9 +1962,9 @@ class KeepArtistView(discord.ui.View):
         self.selected_artist: Optional[dict] = None
 
         options = []
-        for a in artists:
+        for a in artists[:25]:
             options.append(discord.SelectOption(label=a["name"], value=str(a["id"])))
-        self.artist_select.options = options[:25]
+        self.artist_select.options = options
 
     @discord.ui.select(placeholder="Pick an artist...", min_values=1, max_values=1, row=0)
     async def artist_select(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -1979,6 +1979,14 @@ class KeepArtistView(discord.ui.View):
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="🔍 Search", style=discord.ButtonStyle.secondary, row=1)
+    async def search_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        modal = SearchModal(self, self.artist_select, self.artists)
+        await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=1)
     async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2024,6 +2032,16 @@ class KeepAlbumView(discord.ui.View):
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="🔍 Search", style=discord.ButtonStyle.secondary, row=1)
+    async def search_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+            return
+        # Albums need a different search — use title as the "name" field
+        album_dicts = [{"name": a.get("title", "Unknown"), "id": str(a["id"])} for a in self.albums]
+        modal = SearchModal(self, self.album_select, album_dicts)
+        await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=1)
     async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
