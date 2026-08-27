@@ -2071,11 +2071,12 @@ class KeepAlbumView(discord.ui.View):
         self.albums = albums
         self.selected_album: Optional[dict] = None
         
-        # Build dropdown options with logging
+        # Build dropdown options — Discord max 25 options
         import logging
         log = logging.getLogger(__name__)
+        limited = albums[:25]  # Hard clamp to Discord limit
         options = []
-        for i, a in enumerate(albums[:25]):  # Discord max 25 options
+        for i, a in enumerate(limited):
             title = (a.get("title") or "Unknown Album").strip()
             if not title:
                 title = "Unknown Album"
@@ -2084,20 +2085,23 @@ class KeepAlbumView(discord.ui.View):
             if not label.strip():
                 label = "Unknown Album"
             options.append(_opt(label, str(a.get("id", ""))))
-            if i < 3:  # Log first 3
+            if i < 3:
                 log.info(f"KeepAlbumView option {i}: label='{label}', value='{a.get('id', '')}'")
         
         self.album_select.options = options
         
-        # Auto-select if only 1 album provided
-        if len(albums) == 1:
-            self.selected_album = albums[0]
+        log.info(f"KeepAlbumView: Showing {len(limited)} of {len(albums)} albums (clamped to 25)")
+        
+        # Auto-select if only 1 album provided (or 1 after clamping)
+        effective_count = len(limited) if len(limited) < len(albums) else len(albums)
+        if effective_count == 1:
+            self.selected_album = limited[0] if len(limited) == 1 else albums[0]
             self.album_select.disabled = True
-            self.album_select.placeholder = f"Only album: {albums[0].get('title', 'Unknown')}"
-            log.info(f"KeepAlbumView: Auto-selected 1 album: {albums[0].get('title', 'Unknown')}")
+            self.album_select.placeholder = f"Only album: {self.selected_album.get('title', 'Unknown')}"
+            log.info(f"KeepAlbumView: Auto-selected 1 album")
         else:
             self.album_select.placeholder = "Pick an album..."
-            log.info(f"KeepAlbumView: {len(albums)} albums, showing dropdown")
+            log.info(f"KeepAlbumView: {effective_count} albums shown in dropdown")
 
     @discord.ui.select(placeholder="Pick an album...", min_values=1, max_values=1, row=0)
     async def album_select(self, interaction: discord.Interaction, select: discord.ui.Select):
