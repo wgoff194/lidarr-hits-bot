@@ -130,11 +130,23 @@ def _opt(label: str, value: str, **kwargs) -> discord.SelectOption:
     """Create a SelectOption with label truncated to 25 chars (Discord limit).
     
     Ensures label is never empty or None — Discord requires 1+ chars.
+    Also ensures label is never empty after truncation.
     """
-    # Ensure label is a non-empty string, max 25 chars
-    safe_label = (label or "Untitled")[:25]
+    # Ensure label is a string
+    if not isinstance(label, str):
+        label = str(label) if label else "Untitled"
+    
+    # Truncate to max 25 chars (Discord limit)
+    safe_label = label[:25]
+    
+    # Ensure minimum 1 char label after stripping
     if not safe_label.strip():
         safe_label = "Untitled"
+    
+    # Final safety: if still empty, use Untitled
+    if not safe_label or safe_label == "":
+        safe_label = "Untitled"
+    
     return discord.SelectOption(label=safe_label, value=str(value), **kwargs)
 
 
