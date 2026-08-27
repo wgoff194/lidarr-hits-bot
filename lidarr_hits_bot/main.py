@@ -127,8 +127,15 @@ async def auto_thread(ctx: commands.Context):
 
 
 def _opt(label: str, value: str, **kwargs) -> discord.SelectOption:
-    """Create a SelectOption with label truncated to 25 chars (Discord limit)."""
-    return discord.SelectOption(label=label[:25], value=str(value), **kwargs)
+    """Create a SelectOption with label truncated to 25 chars (Discord limit).
+    
+    Ensures label is never empty or None — Discord requires 1+ chars.
+    """
+    # Ensure label is a non-empty string, max 25 chars
+    safe_label = (label or "Untitled")[:25]
+    if not safe_label.strip():
+        safe_label = "Untitled"
+    return discord.SelectOption(label=safe_label, value=str(value), **kwargs)
 
 
 def fuzzy_find_artist(artists: list[dict], query: str) -> Optional[dict]:
