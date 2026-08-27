@@ -2147,9 +2147,11 @@ class KeepTrackView(discord.ui.View):
 
         options = []
         for t in tracks[:25]:
-            title = t.get("title", "Unknown")
+            title = (t.get("title") or "Unknown").strip()
+            if not title:
+                title = "Unknown"
             protected = "🔒" if title.lower() in {p.lower() for p in already_protected} else ""
-            options.append(_opt(f"{protected} {title}".strip(), t["id"],
+            options.append(_opt(f"{protected} {title}".strip(), str(t["id"]),
                 default=title.lower() in {p.lower() for p in already_protected},
             ))
         self.track_select.options = options
