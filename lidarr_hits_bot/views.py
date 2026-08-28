@@ -1193,55 +1193,138 @@ class KeepAlbumView(discord.ui.View):
 
 
 class KeepTrackView(discord.ui.View):
-    """Step 3: Pick tracks to protect (multi-select)."""
+    """Step 3: Pick tracks to protect. One toggle button per track (simulates checkboxes)."""
 
     def __init__(self, author_id: int, tracks: list[dict], already_protected: set[str]):
-        super().__init__(timeout=120)
+        super().__init__(timeout=300)
         self.author_id = author_id
         self.tracks = tracks
         self.already_protected = already_protected
-        self.selected_track_ids: list[str] = []
+        self.selected_track_ids: set[str] = set()
         self.mark_all = False
 
-        options = []
-        for t in tracks[:25]:
-            title = (t.get("title") or "Unknown").strip()
-            if not title:
-                title = "Unknown"
-            protected = "🔒" if title.lower() in {p.lower() for p in already_protected} else ""
-            options.append(_opt(f"{protected} {title}".strip(), str(t["id"]),
-                default=title.lower() in {p.lower() for p in already_protected},
-            ))
-        self.track_select.options = options
+        protected_lower = {p.lower() for p in already_protected}
 
-    @discord.ui.select(placeholder="Select tracks to protect (multi-select)...",
-                       min_values=0, max_values=25, row=0)
-    async def track_select(self, interaction: discord.Interaction, select: discord.ui.Select):
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("❌ Not yours.", ephemeral=True)
-            return
-        self.selected_track_ids = select.values
-        await interaction.response.defer()
+        # Pre-select already-protected tracks
+        for t in tracks:
+            title_lower = (t.get("title") or "").lower()
+            if title_lower in protected_lower:
+                self.selected_track_ids.add(str(t.get("id", "")))
 
-    @discord.ui.button(label="📀 Mark All Tracks", style=discord.ButtonStyle.primary, row=1)
-    async def mark_all_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Build one toggle button per track (max 25 per row, 5 rows max = 25 buttons + 4 action buttons)
+        # Discord limit: 25 components per action row, 5 action rows max = 125 total components
+        for i, t in enumerate(tracks[:25]):
+            title = (t.get("title") or "Unknown").strip() or "Unknown"
+            track_id = str(t.get("id", ""))
+            is_protected = title.lower() in protected_lower
+            label = self._format_button_label(title, track_id in self.selected_track_ids or is_protected)
+            btn = discord.ui.Button(
+                label=label,
+                style=discord.ButtonStyle.success if (track_id in self.selected_track_ids or is_protected) else discord.ButtonStyle.secondary,
+                row=min(i, 4),  # Max 5 rows (0-4)
+                custom_id=f"track_toggle:{track_id}",
+            )
+            btn.callback = self._make_toggle_callback(track_id, title)
+            self.add_item(btn)
+
+        # Mark All button
+        mark_all_btn = discord.ui.Button(
+            label="📀 Mark All",
+            style=discord.ButtonStyle.primary,
+            row=4,
+        )
+        mark_all_btn.callback = self._on_mark_all
+        self.add_item(mark_all_btn)
+
+        # Confirm button
+        confirm_btn = discord.ui.Button(
+            label="✅ Confirm",
+            style=discord.ButtonStyle.success,
+            row=4,
+        )
+        confirm_btn.callback = self._on_confirm
+        self.add_item(confirm_btn)
+
+        # Cancel button
+        cancel_btn = discord.ui.Button(
+            label="❌ Cancel",
+            style=discord.ButtonStyle.danger,
+            row=4,
+        )
+        cancel_btn.callback = self._on_cancel
+        self.add_item(cancel_btn)
+
+    def _format_button_label(self, title: str, selected: bool) -> str:
+        """Format button label with checkmark if selected. Max 80 chars (Discord button label limit)."""
+        # Discord button label limit is 80 chars
+        prefix = "✅ " if selected else "⬜ "
+        max_title_len = 80 - len(prefix)
+        return f"{prefix}{title[:max_title_len]}"
+
+    def _make_toggle_callback(self, track_id: str, title: str):
+        """Create a callback that toggles this track's selection."""
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.author_id:
+                await interaction.response.send_message("❌ Not yours.", ephemeral=True)
+                return
+            # Toggle selection
+            if track_id in self.selected_track_ids:
+                self.selected_track_ids.discard(track_id)
+                new_selected = False
+            else:
+                self.selected_track_ids.add(track_id)
+                new_selected = True
+            # Update this button's label and style
+            for item in self.children:
+                if isinstance(item, discord.ui.Button) and item.custom_id == f"track_toggle:{track_id}":
+                    item.label = self._format_button_label(title, new_selected)
+                    item.style = discord.ButtonStyle.success if new_selected else discord.ButtonStyle.secondary
+                    break
+            # Edit message to reflect changes
+            count = len(self.selected_track_ids)
+            embed = discord.Embed(
+                title=f"🔒 Never Prune — Step 3: Pick Tracks",
+                description=(
+                    f"Click tracks to toggle. ✅ = will protect.\n"
+                    f"**{count} track(s) selected**\n\n"
+                    f"**Confirm** to save your selection."
+                ),
+                color=0x1DB954,
+            )
+            await interaction.response.edit_message(embed=embed, view=self)
+        return callback
+
+    async def _on_mark_all(self, interaction: discord.Interaction):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("❌ Not yours.", ephemeral=True)
             return
         self.mark_all = True
-        self.selected_track_ids = [str(t["id"]) for t in self.tracks]
-        self.stop()
+        # Select all tracks
+        for t in self.tracks:
+            self.selected_track_ids.add(str(t.get("id", "")))
+        # Update all toggle buttons
         for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(
-            embed=discord.Embed(
-                title="✅ All tracks marked as never-prune",
-                description=f"Protecting all {len(self.tracks)} track(s)",
-                color=0x1DB954,
-            ), view=self)
+            if isinstance(item, discord.ui.Button) and item.custom_id and item.custom_id.startswith("track_toggle:"):
+                # Extract title from the button's current label (strip the prefix)
+                current_label = item.label or ""
+                # Remove existing prefix
+                if current_label.startswith("✅ "):
+                    title = current_label[2:]
+                elif current_label.startswith("⬜ "):
+                    title = current_label[2:]
+                else:
+                    title = current_label
+                item.label = self._format_button_label(title, True)
+                item.style = discord.ButtonStyle.success
+        count = len(self.selected_track_ids)
+        embed = discord.Embed(
+            title="✅ All tracks selected",
+            description=f"**{count} track(s)** selected. Click Confirm to save.",
+            color=0x1DB954,
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="✅ Confirm", style=discord.ButtonStyle.success, row=1)
-    async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _on_confirm(self, interaction: discord.Interaction):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("❌ Not yours.", ephemeral=True)
             return
@@ -1259,12 +1342,11 @@ class KeepTrackView(discord.ui.View):
                 color=0x1DB954,
             ), view=self)
 
-    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=2)
-    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _on_cancel(self, interaction: discord.Interaction):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("❌ Not yours.", ephemeral=True)
             return
-        self.selected_track_ids = []
+        self.selected_track_ids = set()
         self.stop()
         for item in self.children:
             item.disabled = True
