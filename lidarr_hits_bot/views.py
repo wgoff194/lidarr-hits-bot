@@ -1051,6 +1051,7 @@ class KeepAlbumView(discord.ui.View):
         self.albums = albums
         self.selected_album: Optional[dict] = None
 
+        # Build options list (max 25 for Discord)
         options = []
         for i, a in enumerate(albums[:25]):
             title = (a.get("title") or "Unknown Album").strip()
@@ -1059,63 +1060,102 @@ class KeepAlbumView(discord.ui.View):
             label = str(title)[:25] if title else "Unknown Album"
             if not label.strip():
                 label = "Unknown Album"
-            options.append(_opt(label, str(a.get("id", ""))))
+            options.append(_opt(label, str(a.get("id", "") or "")))
             if i < 3:
                 log.info(f"KeepAlbumView option {i}: label='{label}', value='{a.get('id', '')}'")
-
-        self.album_select.options = options
 
         # Auto-select if only 1 album provided
         if len(albums) == 1:
             self.selected_album = albums[0]
-            self.album_select.disabled = True
-            self.album_select.placeholder = f"Only album: {albums[0].get('title', 'Unknown')}"
+            placeholder = f"Only album: {(albums[0].get('title') or 'Unknown')[:100]}"
+            disabled = True
             log.info(f"KeepAlbumView: Auto-selected 1 album: {albums[0].get('title', 'Unknown')}")
         else:
-            self.album_select.placeholder = "Pick an album..."
-            log.info(f"KeepAlbumView: {len(albums)} albums, showing dropdown")
+            placeholder = "Pick an album..."
+            disabled = False
+            log.info(f"KeepAlbumView: {len(albums)} albums, showing dropdown ({len(options)} options)")
 
-    @discord.ui.select(placeholder="Pick an album...", min_values=1, max_values=1, row=0)
-    async def album_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        # Create the select component explicitly (not via decorator)
+        self.album_select = discord.ui.Select(
+            placeholder=placeholder,
+            options=options,
+            min_values=1,
+            max_values=1,
+            row=0,
+            disabled=disabled,
+        )
+        self.album_select.callback = self._on_album_select
+        self.add_item(self.album_select)
+
+        # Search button
+        self.search_btn = discord.ui.Button(
+            label="🔍 Search", style=discord.ButtonStyle.secondary, row=1
+        )
+        self.search_btn.callback = self._on_search
+        self.add_item(self.search_btn)
+
+        # Confirm button
+        self.confirm_btn = discord.ui.Button(
+            label="✅ Confirm", style=discord.ButtonStyle.success, row=1
+        )
+        self.confirm_btn.callback = self._on_confirm
+        self.add_item(self.confirm_btn)
+
+        # Cancel button
+        self.cancel_btn = discord.ui.Button(
+            label="❌ Cancel", style=discord.ButtonStyle.danger, row=2
+        )
+        self.cancel_btn.callback = self._on_cancel
+        self.add_item(self.cancel_btn)
+
+    async def _on_album_select(self, interaction: discord.Interaction):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("❌ Not yours.", ephemeral=True)
             return
+        select = self.album_select
         selected_value = select.values[0]
         # Try to find by ID first
         for a in self.albums:
-            if str(a["id"]) == selected_value:
+            if str(a.get("id", "")) == selected_value:
                 self.selected_album = a
                 break
-        # Fallback: find by matching the selected option's label
+        # Fallback: find by matching the option label
         if not self.selected_album:
             for opt in select.options:
                 if opt.value == selected_value:
                     for a in self.albums:
-                        if a.get("title") == opt.label:
+                        if a.get("title") == opt.label or str(a.get("id", "")) == opt.value:
                             self.selected_album = a
                             break
                     break
         # Last resort: create a minimal dict
         if not self.selected_album:
-            for opt in select.options:
-                if opt.value == selected_value:
-                    self.selected_album = {"id": int(selected_value), "title": opt.label}
-                    break
+            self.selected_album = {"id": int(selected_value) if selected_value.isdigit() else selected_value, "title": selected_value}
+        # Set default on selected option
         for opt in select.options:
             opt.default = opt.value == selected_value
+        # Guard: ensure options are valid before re-rendering
+        if not select.options:
+            log.error("KeepAlbumView: select.options is EMPTY!")
+            await interaction.response.send_message("❌ Error: dropdown options missing. Try again.", ephemeral=True)
+            return
+        if len(select.options) > 25:
+            log.error("KeepAlbumView: select.options has %d items (max 25)!", len(select.options))
+        # Diagnostic
+        log.info(f"KeepAlbumView edit_message: {len(select.options)} options")
+        for i, opt in enumerate(select.options[:5]):
+            log.info(f"  opt {i}: label='{opt.label}' (len={len(opt.label)}), value='{opt.value}' (len={len(opt.value)})")
         await interaction.response.edit_message(view=self)
 
-    @discord.ui.button(label="🔍 Search", style=discord.ButtonStyle.secondary, row=1)
-    async def search_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _on_search(self, interaction: discord.Interaction):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("❌ Not yours.", ephemeral=True)
             return
-        album_dicts = [{"name": a.get("title", "Unknown"), "id": str(a["id"])} for a in self.albums]
+        album_dicts = [{"name": a.get("title", "Unknown"), "id": str(a.get("id", ""))} for a in self.albums]
         modal = SearchModal(self, self.album_select, album_dicts)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="✅ Confirm", style=discord.ButtonStyle.success, row=1)
-    async def confirm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _on_confirm(self, interaction: discord.Interaction):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("❌ Not yours.", ephemeral=True)
             return
@@ -1123,11 +1163,11 @@ class KeepAlbumView(discord.ui.View):
             for opt in self.album_select.options:
                 if opt.default:
                     for a in self.albums:
-                        if a.get("title") == opt.label or str(a["id"]) == opt.value:
+                        if a.get("title") == opt.label or str(a.get("id", "")) == opt.value:
                             self.selected_album = a
                             break
                     if not self.selected_album:
-                        self.selected_album = {"id": int(opt.value), "title": opt.label}
+                        self.selected_album = {"id": opt.value, "title": opt.label}
                     break
         if not self.selected_album:
             await interaction.response.send_message("❌ Pick an album first.", ephemeral=True)
@@ -1137,8 +1177,7 @@ class KeepAlbumView(discord.ui.View):
             item.disabled = True
         await interaction.response.edit_message(view=self)
 
-    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=1)
-    async def cancel_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _on_cancel(self, interaction: discord.Interaction):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("❌ Not yours.", ephemeral=True)
             return
