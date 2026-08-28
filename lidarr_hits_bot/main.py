@@ -30,6 +30,7 @@ from typing import Optional
 import discord
 from discord.ext import commands
 
+from .bot import bot
 from .config import Config
 from .database import db
 from .checker import run_daily_check, run_check_for_artist, prune_downloaded_albums, check_pending_downloads
@@ -38,16 +39,7 @@ from .helpers import create_thread, format_prune_results
 log = logging.getLogger(__name__)
 
 
-# ── Bot setup ────────────────────────────────────────────────────────────────
-
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-
-bot = commands.Bot(command_prefix="?", intents=intents)
-
-
-# ── Events ───────────────────────────────────────────────────────────────────
+# ── Bot events are registered in main.py after bot definition (above) ────────
 
 @bot.event
 async def on_ready():

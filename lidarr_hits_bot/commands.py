@@ -11,7 +11,8 @@ from typing import Optional
 import discord
 from discord.ext import commands
 
-from . import bot, db
+from .bot import bot
+from .database import db
 from .config import Config
 from .clients.lidarr import LidarrClient
 from .helpers import _opt, _sync_to_lidarr, create_thread, format_prune_results, fuzzy_find_artist
